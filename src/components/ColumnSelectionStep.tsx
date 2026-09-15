@@ -18,6 +18,7 @@ import {
   Route,
   Waves,
   Sparkles,
+  Zap,
 } from 'lucide-react';
 import { UploadResponse, SheetDetails, ColumnInfo, DrainageFeatureType } from '../types';
 import {
@@ -27,6 +28,7 @@ import {
   DRENAGEM_PROFUNDA_FIELDS,
   DRENAGEM_SUPERFICIAL_FIELDS,
 } from '../constants/presets';
+import { TurboModeModal } from './TurboModeModal';
 
 export const ESTADO_CONSERVACAO_OPTIONS = [
   { value: '', label: 'Todas as linhas (Sem filtro)' },
@@ -69,6 +71,9 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
 
   // Search filter for columns
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Turbo Mode Modal state
+  const [isTurboModeOpen, setIsTurboModeOpen] = useState(false);
 
   // Processing state
   const [isProcessing, setIsProcessing] = useState(false);
@@ -354,6 +359,17 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
         </div>
 
         <div className="flex items-center gap-2 self-stretch sm:self-auto justify-end flex-wrap">
+          {/* Turbo Mode Action Button */}
+          <button
+            type="button"
+            onClick={() => setIsTurboModeOpen(true)}
+            className="inline-flex items-center gap-1.5 text-xs font-bold text-white bg-gradient-to-r from-amber-500 via-orange-500 to-emerald-600 hover:from-amber-600 hover:to-emerald-700 px-3.5 py-2 rounded-xl transition-all shadow-xs cursor-pointer active:scale-98"
+            title="Modo Turbo: Gerar automaticamente XLSX e PDF para todas as rodovias com filtro PRECÁRIO"
+          >
+            <Zap className="w-3.5 h-3.5 fill-amber-300 text-amber-100 animate-pulse" />
+            <span>Modo Turbo</span>
+          </button>
+
           {/* Feature selector dropdown in step 2 */}
           <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs">
             <span className="text-slate-500 font-semibold hidden sm:inline">Modo:</span>
@@ -1091,25 +1107,52 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={handleProcessSpreadsheet}
-          disabled={isProcessing || keptCount === 0}
-          className="w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-sm transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-        >
-          {isProcessing ? (
-            <>
-              <Loader2 className="w-5 h-5 animate-spin" />
-              <span>Processando e gerando arquivo...</span>
-            </>
-          ) : (
-            <>
-              <CheckCircle2 className="w-4 h-4" />
-              <span>Gerar Nova Planilha ({keptCount} colunas mantidas)</span>
-            </>
-          )}
-        </button>
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full sm:w-auto shrink-0">
+          <button
+            type="button"
+            onClick={() => setIsTurboModeOpen(true)}
+            disabled={isProcessing}
+            className="px-5 py-3 rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-emerald-600 hover:from-amber-600 hover:to-emerald-700 text-white font-extrabold text-xs sm:text-sm transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 active:scale-98"
+            title="Gera XLSX e PDF para todas as rodovias automaticamente com filtro PRECÁRIO e Seleção Padrão"
+          >
+            <Zap className="w-4 h-4 fill-amber-300 text-amber-100" />
+            <span>Modo Turbo (XLSX + PDF por Rodovia)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleProcessSpreadsheet}
+            disabled={isProcessing || keptCount === 0}
+            className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-sm transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isProcessing ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span>Processando e gerando arquivo...</span>
+              </>
+            ) : (
+              <>
+                <CheckCircle2 className="w-4 h-4" />
+                <span>Gerar Planilha Desta Aba ({keptCount} colunas)</span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
+
+      {/* Turbo Mode Execution Modal */}
+      <TurboModeModal
+        isOpen={isTurboModeOpen}
+        onClose={() => setIsTurboModeOpen(false)}
+        fileId={uploadData.fileId}
+        originalFileName={uploadData.originalName}
+        sheetName={activeSheet}
+        featureType={featureType}
+        allColumns={sheetDetails.columns}
+        availableRodovias={availableRodovias}
+        rowFiltersData={sheetDetails.rowFiltersData}
+        totalRows={sheetDetails.totalRows}
+      />
     </div>
   );
 };

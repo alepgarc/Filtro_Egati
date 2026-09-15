@@ -1126,13 +1126,14 @@ function toRowElTag(toEl: any): any {
 
 // 3. Process endpoint
 app.post('/api/process', async (req, res) => {
-  const { fileId, sheetName, columnIndicesToRemove, estadoConservacaoFilter, rodoviaFilter, featureType } = req.body as {
+  const { fileId, sheetName, columnIndicesToRemove, estadoConservacaoFilter, rodoviaFilter, featureType, customFileName } = req.body as {
     fileId: string;
     sheetName: string;
     columnIndicesToRemove: number[];
     estadoConservacaoFilter?: string | null;
     rodoviaFilter?: string | null;
     featureType?: string;
+    customFileName?: string;
   };
 
   if (!fileId || !sheetName || !Array.isArray(columnIndicesToRemove)) {
@@ -1155,8 +1156,24 @@ app.post('/api/process', async (req, res) => {
       rodoviaFilter
     );
 
-    const parsedName = path.parse(fileInfo.originalName);
-    const finalFileName = `${parsedName.name}_filtrada.xlsx`;
+    let finalFileName = customFileName ? customFileName.trim() : '';
+    if (!finalFileName) {
+      const parsedName = path.parse(fileInfo.originalName);
+      const safeRodovia = rodoviaFilter ? rodoviaFilter.replace(/[\/\\:*?"<>|]/g, '-').trim() : '';
+      const safeEstado = estadoConservacaoFilter ? estadoConservacaoFilter.replace(/[\/\\:*?"<>|]/g, '-').trim() : '';
+
+      let suffix = '_filtrada';
+      if (safeRodovia && safeEstado) {
+        suffix = `_${safeRodovia}_${safeEstado}`;
+      } else if (safeRodovia) {
+        suffix = `_${safeRodovia}`;
+      } else if (safeEstado) {
+        suffix = `_${safeEstado}`;
+      }
+      finalFileName = `${parsedName.name}${suffix}.xlsx`;
+    } else if (!finalFileName.toLowerCase().endsWith('.xlsx')) {
+      finalFileName = `${finalFileName}.xlsx`;
+    }
 
     const downloadId = 'filtered-' + Date.now() + '-' + Math.round(Math.random() * 1e6);
     const processedFilePath = path.join(PROCESSED_DIR, `${downloadId}.xlsx`);
