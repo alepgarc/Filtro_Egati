@@ -10,14 +10,18 @@ import { StepIndicator } from './components/StepIndicator';
 import { UploadStep } from './components/UploadStep';
 import { ColumnSelectionStep } from './components/ColumnSelectionStep';
 import { DownloadStep } from './components/DownloadStep';
-import { Step, UploadResponse, ProcessResponse } from './types';
+import { Step, UploadResponse, ProcessResponse, DrainageFeatureType } from './types';
 
 export default function App() {
   const [currentStep, setCurrentStep] = useState<Step>(1);
+  const [selectedFeature, setSelectedFeature] = useState<DrainageFeatureType>('drenagem_profunda');
   const [uploadData, setUploadData] = useState<UploadResponse | null>(null);
   const [processedResult, setProcessedResult] = useState<ProcessResponse | null>(null);
 
   const handleUploadSuccess = (data: UploadResponse) => {
+    if (data.featureType) {
+      setSelectedFeature(data.featureType);
+    }
     setUploadData(data);
     setCurrentStep(2);
   };
@@ -88,7 +92,11 @@ export default function App() {
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.2 }}
               >
-                <UploadStep onUploadSuccess={handleUploadSuccess} />
+                <UploadStep
+                  selectedFeature={selectedFeature}
+                  onFeatureChange={setSelectedFeature}
+                  onUploadSuccess={handleUploadSuccess}
+                />
               </motion.div>
             )}
 
@@ -102,6 +110,8 @@ export default function App() {
               >
                 <ColumnSelectionStep
                   uploadData={uploadData}
+                  initialFeatureType={selectedFeature}
+                  onFeatureChange={setSelectedFeature}
                   onBackToUpload={handleBackToUpload}
                   onProcessComplete={handleProcessComplete}
                 />

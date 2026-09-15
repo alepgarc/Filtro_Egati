@@ -1,18 +1,35 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, FileSpreadsheet, AlertCircle, Sparkles, CheckCircle2, Loader2, ShieldCheck, Database } from 'lucide-react';
-import { UploadResponse } from '../types';
+import {
+  UploadCloud,
+  FileSpreadsheet,
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
+  ShieldCheck,
+  Database,
+  Layers,
+  Waves,
+  Check,
+} from 'lucide-react';
+import { UploadResponse, DrainageFeatureType } from '../types';
+import { DRAINAGE_FEATURES } from '../constants/presets';
 
 interface UploadStepProps {
+  selectedFeature: DrainageFeatureType;
+  onFeatureChange: (feature: DrainageFeatureType) => void;
   onUploadSuccess: (data: UploadResponse) => void;
 }
 
-export const UploadStep: React.FC<UploadStepProps> = ({ onUploadSuccess }) => {
+export const UploadStep: React.FC<UploadStepProps> = ({
+  selectedFeature,
+  onFeatureChange,
+  onUploadSuccess,
+}) => {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
-  const [isGeneratingSample, setIsGeneratingSample] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -49,6 +66,7 @@ export const UploadStep: React.FC<UploadStepProps> = ({ onUploadSuccess }) => {
 
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('featureType', selectedFeature);
 
     // Use XMLHttpRequest for accurate upload progress tracking
     const xhr = new XMLHttpRequest();
@@ -66,6 +84,7 @@ export const UploadStep: React.FC<UploadStepProps> = ({ onUploadSuccess }) => {
         setUploadProgress(100);
         try {
           const data: UploadResponse = JSON.parse(xhr.responseText);
+          data.featureType = selectedFeature;
           setTimeout(() => {
             setIsUploading(false);
             onUploadSuccess(data);
@@ -120,29 +139,166 @@ export const UploadStep: React.FC<UploadStepProps> = ({ onUploadSuccess }) => {
     }
   };
 
-  const handleGenerateSample = async () => {
-    setErrorMessage(null);
-    setIsGeneratingSample(true);
-    try {
-      const res = await fetch('/api/generate-sample', {
-        method: 'POST',
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Falha ao gerar planilha de teste.');
-      }
-      const data: UploadResponse = await res.json();
-      onUploadSuccess(data);
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Erro ao gerar planilha de teste.');
-    } finally {
-      setIsGeneratingSample(false);
-    }
-  };
+  const currentFeatureConfig = DRAINAGE_FEATURES[selectedFeature];
 
   return (
     <div className="w-full max-w-4xl mx-auto space-y-6">
-      {/* Upload Box */}
+      {/* 1. Feature Selection Box */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-800 text-xs font-bold flex items-center justify-center">
+                1
+              </span>
+              <h3 className="text-base font-bold text-slate-800">
+                Selecione o Tipo de Drenagem (Feature)
+              </h3>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              Escolha a feature correspondente à sua planilha para configurar automaticamente os campos da Seleção Padrão.
+            </p>
+          </div>
+
+          {/* Quick Dropdown select */}
+          <div className="shrink-0">
+            <select
+              id="feature-select-dropdown"
+              value={selectedFeature}
+              onChange={(e) => onFeatureChange(e.target.value as DrainageFeatureType)}
+              className="w-full sm:w-60 px-3 py-2 text-xs font-bold rounded-xl border border-slate-300 bg-slate-50 text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer shadow-2xs"
+            >
+              <option value="drenagem_profunda">Drenagem Profunda</option>
+              <option value="drenagem_superficial">Drenagem Superficial</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Interactive Feature Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+          {/* Card: Drenagem Profunda */}
+          <div
+            id="card-feature-drenagem-profunda"
+            onClick={() => onFeatureChange('drenagem_profunda')}
+            className={`relative rounded-xl p-4 border-2 transition-all cursor-pointer flex flex-col justify-between text-left ${
+              selectedFeature === 'drenagem_profunda'
+                ? 'border-emerald-600 bg-emerald-50/40 shadow-xs'
+                : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/50'
+            }`}
+          >
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                      selectedFeature === 'drenagem_profunda'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    <Layers className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-800">
+                      Drenagem Profunda
+                    </h4>
+                    <span className="text-[11px] text-slate-500">
+                      Subterrânea / Caixas e Tampas
+                    </span>
+                  </div>
+                </div>
+
+                <div
+                  className={`w-5 h-5 rounded-full flex items-center justify-center border transition-all ${
+                    selectedFeature === 'drenagem_profunda'
+                      ? 'border-emerald-600 bg-emerald-600 text-white'
+                      : 'border-slate-300 bg-white'
+                  }`}
+                >
+                  {selectedFeature === 'drenagem_profunda' && <Check className="w-3.5 h-3.5" />}
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed mt-2">
+                Mantém: <span className="font-semibold text-slate-800">codAuto, km, Rodovia, Sentido, repararEntorno, Limpeza., CaixaDanificada., TampaDanificada/Inxistente, EstadoConservacao, Foto1 a Foto15</span>.
+              </p>
+            </div>
+
+            <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[11px]">
+              <span className="text-slate-500 font-medium">24 colunas mantidas</span>
+              {selectedFeature === 'drenagem_profunda' ? (
+                <span className="text-emerald-700 font-bold bg-emerald-100 px-2 py-0.5 rounded-full">
+                  Selecionada
+                </span>
+              ) : (
+                <span className="text-slate-400">Clique para selecionar</span>
+              )}
+            </div>
+          </div>
+
+          {/* Card: Drenagem Superficial */}
+          <div
+            id="card-feature-drenagem-superficial"
+            onClick={() => onFeatureChange('drenagem_superficial')}
+            className={`relative rounded-xl p-4 border-2 transition-all cursor-pointer flex flex-col justify-between text-left ${
+              selectedFeature === 'drenagem_superficial'
+                ? 'border-emerald-600 bg-emerald-50/40 shadow-xs'
+                : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/50'
+            }`}
+          >
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                      selectedFeature === 'drenagem_superficial'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    <Waves className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-800">
+                      Drenagem Superficial
+                    </h4>
+                    <span className="text-[11px] text-slate-500">
+                      Superfície / Sarjetas e Valetas
+                    </span>
+                  </div>
+                </div>
+
+                <div
+                  className={`w-5 h-5 rounded-full flex items-center justify-center border transition-all ${
+                    selectedFeature === 'drenagem_superficial'
+                      ? 'border-emerald-600 bg-emerald-600 text-white'
+                      : 'border-slate-300 bg-white'
+                  }`}
+                >
+                  {selectedFeature === 'drenagem_superficial' && <Check className="w-3.5 h-3.5" />}
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed mt-2">
+                Mantém: <span className="font-semibold text-slate-800">codAuto, Elemento, km, Rodovia, Sentido, ExtensaoReparar, ExtensaoLimpeza, EstadoConservacao, Foto1 a Foto15</span>.
+              </p>
+            </div>
+
+            <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[11px]">
+              <span className="text-slate-500 font-medium">23 colunas mantidas</span>
+              {selectedFeature === 'drenagem_superficial' ? (
+                <span className="text-emerald-700 font-bold bg-emerald-100 px-2 py-0.5 rounded-full">
+                  Selecionada
+                </span>
+              ) : (
+                <span className="text-slate-400">Clique para selecionar</span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 2. Upload Box */}
       <div
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -172,11 +328,11 @@ export const UploadStep: React.FC<UploadStepProps> = ({ onUploadSuccess }) => {
         </div>
 
         <h3 className="text-lg font-bold text-slate-800 tracking-tight">
-          {isUploading ? 'Enviando e analisando planilha...' : 'Arraste seu arquivo Excel XLSX aqui'}
+          {isUploading ? 'Enviando e analisando planilha...' : `Enviar planilha de ${currentFeatureConfig.name}`}
         </h3>
         <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto">
-          ou clique para selecionar do seu computador. Compatível com planilhas de até{' '}
-          <strong className="text-slate-700 font-semibold">100 MB</strong> (inclusive arquivos de 50 MB com muitas colunas e linhas).
+          Arraste o arquivo .xlsx ou clique para selecionar do seu computador. Compatível com arquivos de até{' '}
+          <strong className="text-slate-700 font-semibold">100 MB</strong>.
         </p>
 
         {/* Upload Progress Bar */}
@@ -225,42 +381,6 @@ export const UploadStep: React.FC<UploadStepProps> = ({ onUploadSuccess }) => {
         </div>
       )}
 
-      {/* Quick Test Card */}
-      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 sm:p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0 mt-0.5">
-            <Sparkles className="w-5 h-5" />
-          </div>
-          <div>
-            <h4 className="text-sm font-bold text-slate-800">
-              Quer testar agora sem enviar arquivo próprio?
-            </h4>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Gere instantaneamente uma planilha de demonstração com 3.500 colaboradores, 12 colunas e 2 abas para experimentar a limpeza.
-            </p>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={handleGenerateSample}
-          disabled={isGeneratingSample || isUploading}
-          className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-white border border-slate-300 hover:border-emerald-500 hover:bg-emerald-50/50 text-slate-800 font-semibold text-xs transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-        >
-          {isGeneratingSample ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
-              <span>Gerando planilha...</span>
-            </>
-          ) : (
-            <>
-              <Sparkles className="w-4 h-4 text-amber-600" />
-              <span>Testar com planilha de exemplo</span>
-            </>
-          )}
-        </button>
-      </div>
-
       {/* Informational Guidance */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
         <div className="bg-white border border-slate-200/80 rounded-xl p-4">
@@ -286,10 +406,10 @@ export const UploadStep: React.FC<UploadStepProps> = ({ onUploadSuccess }) => {
         <div className="bg-white border border-slate-200/80 rounded-xl p-4">
           <div className="text-xs font-bold text-slate-800 flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-            Arquivo Original Protegido
+            Cursor na Célula A1
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Uma nova cópia com o sufixo <code className="text-emerald-700 bg-emerald-50 px-1 py-0.5 rounded">_colunas_filtradas.xlsx</code> é gerada.
+            O arquivo gerado é configurado para abrir diretamente posicionado na célula A1.
           </p>
         </div>
       </div>

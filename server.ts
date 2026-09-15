@@ -7,9 +7,44 @@ import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { createServer as createViteServer } from 'vite';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import sharp from 'sharp';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Official EPR Paraná Logo SVG Definition
+const EPR_PARANA_LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <rect width="400" height="400" rx="36" fill="#072b4a"/>
+  <g transform="translate(45, 95)">
+    <!-- Letter 'e' -->
+    <path d="M 52,140 C 22,140 0,118 0,80 C 0,42 24,18 56,18 C 88,18 108,40 108,78 C 108,86 106,90 98,90 L 25,90 C 27,112 40,123 60,123 C 74,123 85,116 91,105 L 108,114 C 98,131 80,140 52,140 Z M 25,74 L 84,74 C 83,53 72,34 56,34 C 39,34 27,51 25,74 Z" fill="#ffffff" />
+    <!-- Letter 'r' -->
+    <path d="M 230,30 L 254,30 L 254,58 C 263,38 279,28 300,28 L 305,48 C 285,48 266,60 256,76 L 256,140 L 230,140 Z" fill="#ffffff" />
+    <!-- White base parts of 'p' -->
+    <path d="M 125,28 L 150,28 L 150,60 C 160,40 176,28 200,28 C 228,28 248,50 248,88 C 248,126 226,148 198,148 C 176,148 160,136 150,116 L 150,180 L 125,180 Z" fill="#ffffff" opacity="0.95" />
+    <!-- Green Dynamic Swoop ribbon of EPR linking 'e', 'p' and 'r' -->
+    <path d="M 88,88 C 120,40 160,15 210,18 C 255,20 285,55 260,95 C 235,135 185,160 148,155 C 130,152 125,135 135,120 C 148,100 190,82 225,68 C 245,60 250,45 235,38 C 215,30 175,45 140,82 C 122,102 100,125 78,140 L 60,120 C 82,104 100,80 115,55 Z" fill="#67ba7b" opacity="0.9" />
+    <!-- Stylized 'p' bowl accent in green -->
+    <path d="M 128,88 C 128,140 128,185 152,185 C 158,185 158,155 158,135 C 168,148 184,152 200,150 C 235,145 254,115 254,84 C 254,48 232,24 195,24 C 165,24 145,45 136,75 Z" fill="#67ba7b" />
+    <ellipse cx="188" cy="85" rx="30" ry="36" fill="#072b4a" />
+    <!-- Text "PARANÁ" -->
+    <text x="285" y="185" text-anchor="end" font-family="Montserrat, Arial, sans-serif" font-weight="900" font-size="28" fill="#ffffff" letter-spacing="0.5">PARANÁ</text>
+  </g>
+</svg>`;
+
+let cachedEprLogoPng: Buffer | null = null;
+async function getEprLogoPng(): Promise<Buffer> {
+  if (!cachedEprLogoPng) {
+    cachedEprLogoPng = await sharp(Buffer.from(EPR_PARANA_LOGO_SVG))
+      .resize(300, 300)
+      .png()
+      .toBuffer();
+  }
+  return cachedEprLogoPng;
+}
+
 
 // Helper to convert column letter to 0-based index: "A" -> 0, "Z" -> 25, "AA" -> 26
 function colToIdx(col: string): number {
@@ -96,6 +131,7 @@ interface ProcessedFileInfo {
   originalFileName: string;
   appliedEstadoFilter?: string | null;
   appliedRodoviaFilter?: string | null;
+  featureType?: string;
 }
 
 const uploadedFiles = new Map<string, UploadedFileInfo>();
@@ -171,37 +207,62 @@ async function getSheetDetailsAsync(filePath: string, sheetName: string) {
     });
   }
 
-  // Detect Rodovia column index (1-based) and extract unique options
+  // Detect Rodovia and EstadoConservacao column indices (1-based)
   let rodoviaColIdx = -1;
+  let estadoColIdx = -1;
   for (let c = 1; c <= totalCols; c++) {
     const colName = headers[c - 1];
     if (isRodoviaCol(colName)) {
       rodoviaColIdx = c;
-      break;
+    }
+    if (isEstadoConservacaoCol(colName)) {
+      estadoColIdx = c;
     }
   }
 
-  const rodoviaOptions: string[] = [];
-  if (rodoviaColIdx > 0) {
-    const uniqueRodovias = new Set<string>();
-    ws.eachRow((row, rowNumber) => {
-      if (rowNumber > 1) {
+  const rowFiltersData: { r: string; e: string }[] = [];
+  const rodoviaCounts: Record<string, number> = {};
+  const estadoCounts: Record<string, number> = {};
+  const uniqueRodovias = new Set<string>();
+
+  ws.eachRow((row, rowNumber) => {
+    if (rowNumber > 1) {
+      let rVal = '';
+      if (rodoviaColIdx > 0) {
         const cell = row.getCell(rodoviaColIdx);
-        let val = '';
         if (cell.value !== null && cell.value !== undefined) {
-          val = String(cell.text || cell.value).trim();
-        }
-        if (val) {
-          uniqueRodovias.add(val);
+          rVal = String(cell.text || cell.value).trim();
         }
       }
-    });
-    rodoviaOptions.push(
-      ...Array.from(uniqueRodovias).sort((a, b) =>
-        a.localeCompare(b, 'pt-BR', { numeric: true, sensitivity: 'base' })
-      )
-    );
-  }
+
+      let eVal = '';
+      if (estadoColIdx > 0) {
+        const cell = row.getCell(estadoColIdx);
+        if (cell.value !== null && cell.value !== undefined) {
+          eVal = String(cell.text || cell.value).trim();
+        }
+      }
+
+      rowFiltersData.push({ r: rVal, e: eVal });
+
+      if (rVal) {
+        uniqueRodovias.add(rVal);
+        rodoviaCounts[rVal] = (rodoviaCounts[rVal] || 0) + 1;
+      }
+
+      if (eVal) {
+        const normE = normalizeString(eVal);
+        if (normE === 'bom') estadoCounts['BOM'] = (estadoCounts['BOM'] || 0) + 1;
+        else if (normE === 'regular') estadoCounts['REGULAR'] = (estadoCounts['REGULAR'] || 0) + 1;
+        else if (normE === 'precario') estadoCounts['PRECÁRIO'] = (estadoCounts['PRECÁRIO'] || 0) + 1;
+        else estadoCounts[eVal] = (estadoCounts[eVal] || 0) + 1;
+      }
+    }
+  });
+
+  const rodoviaOptions = Array.from(uniqueRodovias).sort((a, b) =>
+    a.localeCompare(b, 'pt-BR', { numeric: true, sensitivity: 'base' })
+  );
 
   // Read up to 20 preview rows (rows 2 to min(ws.rowCount, 21))
   const previewRows: (string | number | boolean | null)[][] = [];
@@ -236,10 +297,13 @@ async function getSheetDetailsAsync(filePath: string, sheetName: string) {
   return {
     headers,
     columns,
-    totalRows,
+    totalRows: rowFiltersData.length,
     totalCols,
     previewRows,
     rodoviaOptions,
+    rowFiltersData,
+    rodoviaCounts,
+    estadoCounts,
   };
 }
 
@@ -1062,12 +1126,13 @@ function toRowElTag(toEl: any): any {
 
 // 3. Process endpoint
 app.post('/api/process', async (req, res) => {
-  const { fileId, sheetName, columnIndicesToRemove, estadoConservacaoFilter, rodoviaFilter } = req.body as {
+  const { fileId, sheetName, columnIndicesToRemove, estadoConservacaoFilter, rodoviaFilter, featureType } = req.body as {
     fileId: string;
     sheetName: string;
     columnIndicesToRemove: number[];
     estadoConservacaoFilter?: string | null;
     rodoviaFilter?: string | null;
+    featureType?: string;
   };
 
   if (!fileId || !sheetName || !Array.isArray(columnIndicesToRemove)) {
@@ -1115,6 +1180,7 @@ app.post('/api/process', async (req, res) => {
       originalFileName: fileInfo.originalName,
       appliedEstadoFilter: processed.appliedEstadoFilter,
       appliedRodoviaFilter: processed.appliedRodoviaFilter,
+      featureType: featureType || 'drenagem_profunda',
     });
 
     res.json({
@@ -1132,6 +1198,7 @@ app.post('/api/process', async (req, res) => {
       appliedEstadoFilter: processed.appliedEstadoFilter,
       appliedRodoviaFilter: processed.appliedRodoviaFilter,
       downloadUrl: `/api/download/${downloadId}`,
+      pdfDownloadUrl: `/api/download-pdf/${downloadId}`,
     });
   } catch (error: any) {
     console.error('Error processing spreadsheet with ZIP engine:', error);
@@ -1141,7 +1208,7 @@ app.post('/api/process', async (req, res) => {
   }
 });
 
-// 4. Download endpoint
+// 4. Download XLSX endpoint
 app.get('/api/download/:downloadId', (req, res) => {
   const downloadId = req.params.downloadId;
   const processedInfo = processedFiles.get(downloadId);
@@ -1167,42 +1234,661 @@ app.get('/api/download/:downloadId', (req, res) => {
   fileStream.pipe(res);
 });
 
-// 5. Generate sample XLSX endpoint for quick testing using ExcelJS
-app.post('/api/generate-sample', async (_req, res) => {
+interface ExtractedMediaItem {
+  base64: string;
+  format: 'JPEG' | 'PNG';
+}
+
+interface ExtractedMediaStore {
+  byName: Map<string, ExtractedMediaItem>;
+  byCell: Map<string, ExtractedMediaItem>;
+  allMedia: ExtractedMediaItem[];
+}
+
+function cleanImageKey(key: string): string {
+  if (!key) return '';
+  return key
+    .toLowerCase()
+    .trim()
+    .replace(/[\\/]/g, '')
+    .replace(/\s+/g, '')
+    .replace(/[._\-+]/g, '');
+}
+
+async function extractMediaFromZipWorkbook(filePath: string): Promise<ExtractedMediaStore> {
+  const store: ExtractedMediaStore = {
+    byName: new Map(),
+    byCell: new Map(),
+    allMedia: [],
+  };
+
+  try {
+    if (!fs.existsSync(filePath)) return store;
+    const fileBuf = fs.readFileSync(filePath);
+    const zip = await JSZip.loadAsync(fileBuf);
+    const parser = new DOMParser();
+
+    // 1. Extract all media files from xl/media/
+    const rawMediaFiles = new Map<string, ExtractedMediaItem>();
+
+    for (const [relPath, zipEntry] of Object.entries(zip.files)) {
+      if (relPath.startsWith('xl/media/') && !zipEntry.dir) {
+        try {
+          const rawBuffer = await zipEntry.async('nodebuffer');
+          const ext = path.extname(relPath).toLowerCase();
+
+          let format: 'JPEG' | 'PNG' = 'JPEG';
+          let processedBuffer = rawBuffer;
+
+          try {
+            const meta = await sharp(rawBuffer).metadata();
+            if (meta.format === 'png') {
+              format = 'PNG';
+              processedBuffer = await sharp(rawBuffer)
+                .resize({ width: 600, height: 600, fit: 'inside', withoutEnlargement: true })
+                .png()
+                .toBuffer();
+            } else {
+              format = 'JPEG';
+              processedBuffer = await sharp(rawBuffer)
+                .resize({ width: 600, height: 600, fit: 'inside', withoutEnlargement: true })
+                .jpeg({ quality: 85 })
+                .toBuffer();
+            }
+          } catch {
+            format = ext === '.png' ? 'PNG' : 'JPEG';
+          }
+
+          const base64 = processedBuffer.toString('base64');
+          const mediaItem: ExtractedMediaItem = {
+            base64,
+            format,
+          };
+
+          rawMediaFiles.set(relPath, mediaItem);
+          const baseName = path.basename(relPath);
+          rawMediaFiles.set(baseName, mediaItem);
+          rawMediaFiles.set(`../media/${baseName}`, mediaItem);
+
+          store.allMedia.push(mediaItem);
+          store.byName.set(cleanImageKey(baseName), mediaItem);
+          store.byName.set(cleanImageKey(baseName.replace(/\.[^.]+$/, '')), mediaItem);
+        } catch (mediaErr) {
+          console.warn(`Failed to process media file ${relPath}:`, mediaErr);
+        }
+      }
+    }
+
+    // 2. Parse drawing relationships (xl/drawings/_rels/drawing*.xml.rels)
+    const relsMap = new Map<string, Map<string, ExtractedMediaItem>>();
+
+    for (const [relPath, zipEntry] of Object.entries(zip.files)) {
+      if (relPath.startsWith('xl/drawings/_rels/drawing') && relPath.endsWith('.xml.rels')) {
+        try {
+          const relsXml = await zipEntry.async('string');
+          const doc = parser.parseFromString(relsXml, 'text/xml');
+          const relNodes = doc.getElementsByTagName('Relationship');
+          const curRels = new Map<string, ExtractedMediaItem>();
+
+          for (let i = 0; i < relNodes.length; i++) {
+            const rEl = relNodes.item(i);
+            const id = rEl?.getAttribute('Id') || '';
+            const target = rEl?.getAttribute('Target') || '';
+            if (id && target) {
+              const targetBase = path.basename(target);
+              const matched =
+                rawMediaFiles.get(target) ||
+                rawMediaFiles.get(targetBase) ||
+                rawMediaFiles.get(`xl/media/${targetBase}`);
+              if (matched) {
+                curRels.set(id, matched);
+              }
+            }
+          }
+
+          const drawingName = relPath.replace('_rels/', '').replace('.rels', '');
+          relsMap.set(drawingName, curRels);
+          relsMap.set(path.basename(drawingName), curRels);
+        } catch (e) {
+          console.warn('Error reading drawing rels:', e);
+        }
+      }
+    }
+
+    // 3. Parse drawing XML files (xl/drawings/drawing*.xml)
+    for (const [relPath, zipEntry] of Object.entries(zip.files)) {
+      if (relPath.startsWith('xl/drawings/drawing') && relPath.endsWith('.xml')) {
+        try {
+          const drawingXml = await zipEntry.async('string');
+          const doc = parser.parseFromString(drawingXml, 'text/xml');
+          const curRels = relsMap.get(relPath) || relsMap.get(path.basename(relPath)) || new Map();
+
+          const anchors = Array.from(doc.documentElement.childNodes).filter((n: any) => n.nodeType === 1);
+
+          for (const anchor of anchors) {
+            const el = anchor as any;
+            const fromEl = el.getElementsByTagName('xdr:from').item(0) || el.getElementsByTagName('from').item(0);
+            const rowEl = fromEl?.getElementsByTagName('xdr:row').item(0) || fromEl?.getElementsByTagName('row').item(0);
+            const colEl = fromEl?.getElementsByTagName('xdr:col').item(0) || fromEl?.getElementsByTagName('col').item(0);
+
+            const row0 = rowEl ? parseInt(rowEl.textContent || '-1', 10) : -1;
+            const col0 = colEl ? parseInt(colEl.textContent || '-1', 10) : -1;
+
+            const blipEl = el.getElementsByTagName('a:blip').item(0) || el.getElementsByTagName('blip').item(0);
+            const rId = blipEl?.getAttribute('r:embed') || blipEl?.getAttribute('embed') || '';
+
+            const cNvPrEl = el.getElementsByTagName('xdr:cNvPr').item(0) || el.getElementsByTagName('cNvPr').item(0);
+            const name = cNvPrEl?.getAttribute('name') || '';
+            const descr = cNvPrEl?.getAttribute('descr') || '';
+            const title = cNvPrEl?.getAttribute('title') || '';
+
+            const media = curRels.get(rId) || rawMediaFiles.get(name) || rawMediaFiles.get(path.basename(name));
+
+            if (media) {
+              if (row0 >= 0 && col0 >= 0) {
+                const sheetRow = row0 + 1;
+                const sheetCol = col0 + 1;
+                store.byCell.set(`${sheetRow}:${sheetCol}`, media);
+              }
+
+              if (name) {
+                store.byName.set(cleanImageKey(name), media);
+                store.byName.set(cleanImageKey(path.basename(name)), media);
+                store.byName.set(cleanImageKey(name.replace(/\.[^.]+$/, '')), media);
+              }
+              if (descr) {
+                store.byName.set(cleanImageKey(descr), media);
+              }
+              if (title) {
+                store.byName.set(cleanImageKey(title), media);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Error reading drawing xml:', e);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error extracting media from zip workbook:', err);
+  }
+
+  return store;
+}
+
+// Helper to detect photo columns beyond Foto4 to exclude ONLY from the PDF output
+function isExcludedPdfPhotoColumn(headerName: string): boolean {
+  const norm = headerName.toLowerCase().replace(/[\s_\-]/g, '');
+  const match = norm.match(/^foto(\d+)$/);
+  if (match) {
+    const num = parseInt(match[1], 10);
+    return num > 4; // Exclude Foto5, Foto6, ... Foto15 etc. from the PDF
+  }
+  return false;
+}
+
+// 4.1 Download PDF Landscape endpoint
+app.get('/api/download-pdf/:downloadId', async (req, res) => {
+  const downloadId = req.params.downloadId;
+  const processedInfo = processedFiles.get(downloadId);
+
+  if (!processedInfo || !fs.existsSync(processedInfo.filePath)) {
+    return res.status(404).send('Arquivo para download PDF não encontrado ou já expirado.');
+  }
+
   try {
     const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(processedInfo.filePath);
+    const ws = wb.worksheets[0];
 
-    // 1st sheet: Levantamento_Rodoviario with user's preset fields + extra fields
-    const ws1 = wb.addWorksheet('Levantamento_Rodoviario');
-    const roadHeaders = [
-      'codAuto',
-      'km',
-      'Rodovia',
-      'repararEntorno',
-      'Limpeza.',
-      'CaixaDanificada.',
-      'TampaDanificada/Inxistente',
-      'EstadoConservacao',
-      'CodTrechoAntigo',
-      'ObservacoesDescartadas',
-      'CustoEstimado',
-      'RascunhoInterno',
-      'Foto1',
-      'Foto2',
-      'Foto3',
-      'Foto4',
-      'Foto5',
-      'Foto6',
-      'Foto7',
-      'Foto8',
-      'Foto9',
-      'Foto10',
-      'Foto11',
-      'Foto12',
-      'Foto13',
-      'Foto14',
-      'Foto15',
-    ];
+    if (!ws) {
+      return res.status(400).send('Não foi possível ler as linhas da planilha para gerar o PDF.');
+    }
+
+    // Extract all embedded images from the processed Excel file
+    const mediaStore = await extractMediaFromZipWorkbook(processedInfo.filePath);
+    const eprLogoPng = await getEprLogoPng();
+
+    const headerRow = ws.getRow(1);
+    const totalCols = ws.columnCount;
+
+    // Filter columns for PDF: include metadata columns and only photos up to Foto4
+    const validPdfCols: { originalCol: number; header: string; isPhoto: boolean; photoNum?: number }[] = [];
+
+    for (let c = 1; c <= totalCols; c++) {
+      const cell = headerRow.getCell(c);
+      const textVal = String(cell.text || cell.value || `Col ${c}`).trim();
+      if (!textVal) continue;
+
+      // Exclude Foto5, Foto6, ... Foto15 from the PDF output as requested
+      if (isExcludedPdfPhotoColumn(textVal)) {
+        continue;
+      }
+
+      const normCol = textVal.toLowerCase().replace(/[\s_\-]/g, '');
+      const match = normCol.match(/^foto(\d+)$/);
+      const isPhoto =
+        match !== null ||
+        normCol.startsWith('foto') ||
+        normCol.includes('imagem') ||
+        normCol.includes('fotografia') ||
+        normCol.includes('img');
+      const photoNum = match ? parseInt(match[1], 10) : undefined;
+
+      validPdfCols.push({
+        originalCol: c,
+        header: textVal,
+        isPhoto,
+        photoNum,
+      });
+    }
+
+    const headers = validPdfCols.map((c) => c.header);
+    const dataRows: string[][] = [];
+    const cellImages = new Map<string, ExtractedMediaItem>();
+    const totalRows = ws.rowCount;
+    let hasAnyImages = false;
+
+    for (let r = 2; r <= totalRows; r++) {
+      const row = ws.getRow(r);
+      const rowData: string[] = [];
+      let hasAnyData = false;
+      const rowIndex = dataRows.length; // 0-based for autoTable
+
+      for (let pdfColIdx = 0; pdfColIdx < validPdfCols.length; pdfColIdx++) {
+        const colInfo = validPdfCols[pdfColIdx];
+        const originalCol = colInfo.originalCol;
+        const cell = row.getCell(originalCol);
+        let valStr = '';
+
+        if (cell.value !== null && cell.value !== undefined) {
+          if (typeof cell.value === 'object' && 'text' in cell.value) {
+            valStr = String((cell.value as any).text || '');
+          } else if (typeof cell.value === 'object' && 'result' in cell.value) {
+            valStr = String((cell.value as any).result || '');
+          } else if (cell.value instanceof Date) {
+            valStr = cell.value.toLocaleDateString('pt-BR');
+          } else {
+            valStr = String(cell.text || cell.value || '');
+          }
+        }
+
+        const trimmedVal = valStr.trim();
+        if (trimmedVal) hasAnyData = true;
+
+        // Check if an image matches this cell
+        let matchedImage: ExtractedMediaItem | undefined;
+
+        // 1. Match by cell coordinate (r, originalCol)
+        const cellKey = `${r}:${originalCol}`;
+        if (mediaStore.byCell.has(cellKey)) {
+          matchedImage = mediaStore.byCell.get(cellKey);
+        }
+
+        // 2. Match by cell filename text
+        if (!matchedImage && trimmedVal) {
+          const cleanKey = cleanImageKey(trimmedVal);
+          const baseNameClean = cleanImageKey(path.basename(trimmedVal));
+          const noExtClean = cleanImageKey(trimmedVal.replace(/\.[^.]+$/, ''));
+
+          matchedImage =
+            mediaStore.byName.get(cleanKey) ||
+            mediaStore.byName.get(baseNameClean) ||
+            mediaStore.byName.get(noExtClean);
+
+          if (
+            !matchedImage &&
+            (cleanKey.includes('foto') ||
+              cleanKey.includes('drenagem') ||
+              cleanKey.includes('jpg') ||
+              cleanKey.includes('png'))
+          ) {
+            for (const [k, img] of mediaStore.byName.entries()) {
+              if (k.length > 5 && (cleanKey.includes(k) || k.includes(cleanKey))) {
+                matchedImage = img;
+                break;
+              }
+            }
+          }
+        }
+
+        // 3. Match by photo column order if only sequential images exist
+        if (
+          !matchedImage &&
+          colInfo.isPhoto &&
+          trimmedVal &&
+          (trimmedVal.endsWith('.jpg') ||
+            trimmedVal.endsWith('.png') ||
+            trimmedVal.endsWith('.jpeg'))
+        ) {
+          const simpleName = path.basename(trimmedVal).toLowerCase();
+          for (const [k, img] of mediaStore.byName.entries()) {
+            if (simpleName.includes(k) || k.includes(simpleName)) {
+              matchedImage = img;
+              break;
+            }
+          }
+        }
+
+        if (matchedImage) {
+          cellImages.set(`${rowIndex}:${pdfColIdx}`, matchedImage);
+          hasAnyImages = true;
+          // When image exists, render blank text in cell so text doesn't overlap the photo
+          rowData.push('');
+        } else {
+          rowData.push(trimmedVal);
+        }
+      }
+
+      if (hasAnyData) {
+        dataRows.push(rowData);
+      }
+    }
+
+    // Generate PDF in Landscape format (A4: 297mm width x 210mm height)
+    const doc = new jsPDF({
+      orientation: 'landscape',
+      unit: 'mm',
+      format: 'a4',
+    });
+
+    const colCount = Math.max(1, headers.length);
+
+    // Optimized typography for clean readability when photos 1 to 4 are displayed
+    let fontSize = 7.0;
+    let cellPadding = 1.2;
+    if (colCount <= 8) {
+      fontSize = 8.5;
+      cellPadding = 1.8;
+    } else if (colCount <= 12) {
+      fontSize = 7.2;
+      cellPadding = 1.3;
+    } else if (colCount <= 16) {
+      fontSize = 6.2;
+      cellPadding = 1.0;
+    } else {
+      fontSize = 5.2;
+      cellPadding = 0.8;
+    }
+
+    const featureName =
+      processedInfo.featureType === 'drenagem_superficial'
+        ? 'Drenagem Superficial'
+        : 'Drenagem Profunda';
+
+    // Calculate precise column widths so that the table fills 100% of the horizontal width (285mm)
+    const totalUsableWidth = 285.0; // 297mm A4 width - 6mm left margin - 6mm right margin
+    const photoCols = validPdfCols.filter((c) => c.isPhoto);
+    const metaCols = validPdfCols.filter((c) => !c.isPhoto);
+
+    // Calculate metadata column widths
+    const metaWidthMap: Record<number, number> = {};
+    let totalMetaWidth = 0;
+
+    validPdfCols.forEach((col, idx) => {
+      if (!col.isPhoto) {
+        const headerLower = col.header.toLowerCase().replace(/[\s_\-]/g, '');
+        let colW = 15.0;
+        if (headerLower === 'codauto') colW = 14.0;
+        else if (headerLower === 'km') colW = 14.0;
+        else if (headerLower === 'rodovia') colW = 16.0;
+        else if (headerLower === 'sentido') colW = 13.0;
+        else if (headerLower === 'elemento') colW = 18.0;
+        else if (headerLower.includes('limpeza') || headerLower.includes('reparar') || headerLower.includes('extensao')) colW = 15.0;
+        else if (headerLower.includes('estado')) colW = 19.0;
+        else colW = 15.0;
+
+        metaWidthMap[idx] = colW;
+        totalMetaWidth += colW;
+      }
+    });
+
+    const photoColsCount = Math.max(1, photoCols.length);
+    const remainingWidthForPhotos = Math.max(40, totalUsableWidth - totalMetaWidth);
+    const individualPhotoWidth = remainingWidthForPhotos / photoColsCount;
+
+    // Define column styles with calculated widths to reach the right margin (291mm)
+    const columnStyles: Record<number, any> = {};
+    validPdfCols.forEach((col, idx) => {
+      if (col.isPhoto) {
+        columnStyles[idx] = {
+          cellWidth: individualPhotoWidth,
+          halign: 'center',
+          valign: 'middle',
+        };
+      } else {
+        columnStyles[idx] = {
+          cellWidth: metaWidthMap[idx] || 15.0,
+          halign: 'center',
+          valign: 'middle',
+        };
+      }
+    });
+
+    // Generous cell height for rows when photos are present (39.5mm allows photos up to 50mm x 37.5mm!)
+    const photoCellHeight = Math.max(26.0, Math.min(42.0, ((individualPhotoWidth - 2.0) / 1.3333) + 2.5));
+    const minCellHeight = hasAnyImages ? photoCellHeight : 5.0;
+
+    autoTable(doc, {
+      head: [headers],
+      body: dataRows,
+      startY: 23,
+      margin: { top: 23, right: 6, bottom: 12, left: 6 },
+      tableWidth: totalUsableWidth,
+      theme: 'grid',
+      columnStyles,
+      styles: {
+        fontSize,
+        cellPadding,
+        overflow: 'linebreak',
+        halign: 'center',
+        valign: 'middle',
+        lineColor: [226, 232, 240], // slate-200
+        lineWidth: 0.1,
+        textColor: [30, 41, 59], // slate-800
+        minCellHeight,
+      },
+      headStyles: {
+        fillColor: [7, 43, 74], // EPR Navy Blue #072b4a
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        halign: 'center',
+        valign: 'middle',
+        fontSize: fontSize + 0.3,
+      },
+      alternateRowStyles: {
+        fillColor: [248, 250, 252], // slate-50
+      },
+      horizontalPageBreak: false,
+      rowPageBreak: 'avoid',
+      showHead: 'everyPage',
+      didDrawCell: (data) => {
+        if (data.section === 'body') {
+          const key = `${data.row.index}:${data.column.index}`;
+          const img = cellImages.get(key);
+          if (img) {
+            try {
+              const pad = 1.0;
+              const maxW = data.cell.width - pad * 2;
+              const maxH = data.cell.height - pad * 2;
+
+              // Maintain standard 4:3 photo aspect ratio inside the cell
+              const targetRatio = 1.333;
+              let imgW = maxW;
+              let imgH = imgW / targetRatio;
+              if (imgH > maxH) {
+                imgH = maxH;
+                imgW = imgH * targetRatio;
+              }
+
+              const posX = data.cell.x + (data.cell.width - imgW) / 2;
+              const posY = data.cell.y + (data.cell.height - imgH) / 2;
+
+              doc.addImage(img.base64, img.format, posX, posY, imgW, imgH);
+
+              // Subtle rounded border around photo
+              doc.setDrawColor(203, 213, 225);
+              doc.setLineWidth(0.12);
+              doc.roundedRect(posX, posY, imgW, imgH, 0.4, 0.4, 'S');
+            } catch (drawErr) {
+              console.warn('Failed to embed cell photo in PDF:', drawErr);
+            }
+          }
+        }
+      },
+      didDrawPage: () => {
+        // Embed EPR Paraná Logo at top-left
+        try {
+          doc.addImage(eprLogoPng, 'PNG', 6, 3.5, 14.5, 14.5);
+        } catch (logoErr) {
+          console.warn('Failed to render EPR logo on PDF:', logoErr);
+        }
+
+        // Header Title
+        doc.setFontSize(10.5);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(7, 43, 74); // EPR Navy #072b4a
+        doc.text(`EPR PARANÁ • RELATÓRIO DE LEVANTAMENTO • ${featureName.toUpperCase()}`, 23.5, 8.5);
+
+        // Header Subtitle
+        doc.setFontSize(6.8);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 116, 139); // slate-500
+
+        let filterText = '';
+        if (processedInfo.appliedRodoviaFilter) {
+          filterText += ` • Rodovia: ${processedInfo.appliedRodoviaFilter}`;
+        }
+        if (processedInfo.appliedEstadoFilter) {
+          filterText += ` • Estado: ${processedInfo.appliedEstadoFilter}`;
+        }
+
+        const photosCountStr = hasAnyImages ? ` • Fotos 1 a 4 incorporadas` : '';
+        const subtitle = `Arquivo: ${processedInfo.originalFileName} • Total: ${dataRows.length.toLocaleString('pt-BR')} registros • ${colCount} colunas no PDF${filterText}${photosCountStr}`;
+        doc.text(subtitle, 23.5, 13.5);
+
+        // Header Green Accent Divider Line
+        doc.setDrawColor(103, 186, 123); // EPR Green #67ba7b
+        doc.setLineWidth(0.4);
+        doc.line(6, 19.5, 291, 19.5);
+      },
+    });
+
+    // Page footer with pagination "Página X de Y" and timestamp
+    const totalPages = doc.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      doc.setFontSize(6.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(148, 163, 184); // slate-400
+
+      // Footer divider line
+      doc.setDrawColor(226, 232, 240);
+      doc.setLineWidth(0.2);
+      doc.line(6, 201, 291, 201);
+
+      doc.text(
+        `EPR Paraná • Sistema de Padronização de Drenagem • Gerado em ${new Date().toLocaleString('pt-BR')}`,
+        6,
+        205.5
+      );
+      doc.text(`Página ${i} de ${totalPages}`, 291, 205.5, { align: 'right' });
+    }
+
+    const pdfBuffer = Buffer.from(doc.output('arraybuffer'));
+    const parsedName = path.parse(processedInfo.fileName);
+    const pdfFileName = `${parsedName.name}.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', pdfBuffer.length);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${pdfFileName}"; filename*=UTF-8''${encodeURIComponent(pdfFileName)}`
+    );
+
+    res.send(pdfBuffer);
+  } catch (error: any) {
+    console.error('Error generating PDF:', error);
+    res.status(500).send('Erro ao gerar o arquivo PDF: ' + (error.message || 'Falha desconhecida'));
+  }
+});
+
+
+// 5. Generate sample XLSX endpoint for quick testing using ExcelJS
+app.post('/api/generate-sample', async (req, res) => {
+  try {
+    const { featureType = 'drenagem_profunda' } = req.body || {};
+    const wb = new ExcelJS.Workbook();
+
+    const isSuperficial = featureType === 'drenagem_superficial';
+    const sheetTitle = isSuperficial ? 'Drenagem_Superficial' : 'Drenagem_Profunda';
+
+    // 1st sheet: feature specific headers + extra fields to test removal
+    const ws1 = wb.addWorksheet(sheetTitle);
+
+    let roadHeaders: string[];
+    if (isSuperficial) {
+      roadHeaders = [
+        'codAuto',
+        'Elemento',
+        'km',
+        'Rodovia',
+        'Sentido',
+        'ExtensaoReparar',
+        'ExtensaoLimpeza',
+        'EstadoConservacao',
+        'CodTrechoAntigo',
+        'ObservacoesDescartadas',
+        'CustoEstimado',
+        'RascunhoInterno',
+        'Foto1',
+        'Foto2',
+        'Foto3',
+        'Foto4',
+        'Foto5',
+        'Foto6',
+        'Foto7',
+        'Foto8',
+        'Foto9',
+        'Foto10',
+        'Foto11',
+        'Foto12',
+        'Foto13',
+        'Foto14',
+        'Foto15',
+      ];
+    } else {
+      roadHeaders = [
+        'codAuto',
+        'km',
+        'Rodovia',
+        'Sentido',
+        'repararEntorno',
+        'Limpeza.',
+        'CaixaDanificada.',
+        'TampaDanificada/Inxistente',
+        'EstadoConservacao',
+        'CodTrechoAntigo',
+        'ObservacoesDescartadas',
+        'CustoEstimado',
+        'RascunhoInterno',
+        'Foto1',
+        'Foto2',
+        'Foto3',
+        'Foto4',
+        'Foto5',
+        'Foto6',
+        'Foto7',
+        'Foto8',
+        'Foto9',
+        'Foto10',
+        'Foto11',
+        'Foto12',
+        'Foto13',
+        'Foto14',
+        'Foto15',
+      ];
+    }
 
     ws1.columns = roadHeaders.map((h, i) => ({
       header: h,
@@ -1213,37 +1899,71 @@ app.post('/api/generate-sample', async (_req, res) => {
     const highways = ['SP-330', 'SP-310', 'BR-116', 'SP-348', 'SP-070'];
     const yesNo = ['Sim', 'Não'];
     const conservations = ['BOM', 'REGULAR', 'PRECÁRIO'];
+    const sentidos = ['Norte', 'Sul', 'Leste', 'Oeste'];
+    const elementos = ['Valeta de Proteção', 'Sarjeta Triangular', 'Descida d\'Água', 'Meio-Fio'];
 
     for (let i = 1; i <= 250; i++) {
-      ws1.addRow([
-        1000 + i,
-        (i * 1.5).toFixed(1),
-        highways[i % highways.length],
-        yesNo[i % 2],
-        yesNo[(i + 1) % 2],
-        yesNo[i % 3 === 0 ? 0 : 1],
-        yesNo[i % 4 === 0 ? 0 : 1],
-        conservations[i % conservations.length],
-        `ANTIGO-${i}`,
-        `Anotação de descarte ${i}`,
-        (1500 + i * 25).toFixed(2),
-        `Rascunho interno nº ${i}`,
-        `IMG_${i}_01.jpg`,
-        `IMG_${i}_02.jpg`,
-        `IMG_${i}_03.jpg`,
-        `IMG_${i}_04.jpg`,
-        `IMG_${i}_05.jpg`,
-        `IMG_${i}_06.jpg`,
-        `IMG_${i}_07.jpg`,
-        `IMG_${i}_08.jpg`,
-        `IMG_${i}_09.jpg`,
-        `IMG_${i}_10.jpg`,
-        `IMG_${i}_11.jpg`,
-        `IMG_${i}_12.jpg`,
-        `IMG_${i}_13.jpg`,
-        `IMG_${i}_14.jpg`,
-        `IMG_${i}_15.jpg`,
-      ]);
+      if (isSuperficial) {
+        ws1.addRow([
+          1000 + i,
+          elementos[i % elementos.length],
+          (i * 1.5).toFixed(1),
+          highways[i % highways.length],
+          sentidos[i % sentidos.length],
+          (i * 3.2).toFixed(1) + ' m',
+          (i * 5.0).toFixed(1) + ' m',
+          conservations[i % conservations.length],
+          `ANTIGO-${i}`,
+          `Anotação de descarte ${i}`,
+          (1500 + i * 25).toFixed(2),
+          `Rascunho interno nº ${i}`,
+          `IMG_${i}_01.jpg`,
+          `IMG_${i}_02.jpg`,
+          `IMG_${i}_03.jpg`,
+          `IMG_${i}_04.jpg`,
+          `IMG_${i}_05.jpg`,
+          `IMG_${i}_06.jpg`,
+          `IMG_${i}_07.jpg`,
+          `IMG_${i}_08.jpg`,
+          `IMG_${i}_09.jpg`,
+          `IMG_${i}_10.jpg`,
+          `IMG_${i}_11.jpg`,
+          `IMG_${i}_12.jpg`,
+          `IMG_${i}_13.jpg`,
+          `IMG_${i}_14.jpg`,
+          `IMG_${i}_15.jpg`,
+        ]);
+      } else {
+        ws1.addRow([
+          1000 + i,
+          (i * 1.5).toFixed(1),
+          highways[i % highways.length],
+          yesNo[i % 2],
+          yesNo[(i + 1) % 2],
+          yesNo[i % 3 === 0 ? 0 : 1],
+          yesNo[i % 4 === 0 ? 0 : 1],
+          conservations[i % conservations.length],
+          `ANTIGO-${i}`,
+          `Anotação de descarte ${i}`,
+          (1500 + i * 25).toFixed(2),
+          `Rascunho interno nº ${i}`,
+          `IMG_${i}_01.jpg`,
+          `IMG_${i}_02.jpg`,
+          `IMG_${i}_03.jpg`,
+          `IMG_${i}_04.jpg`,
+          `IMG_${i}_05.jpg`,
+          `IMG_${i}_06.jpg`,
+          `IMG_${i}_07.jpg`,
+          `IMG_${i}_08.jpg`,
+          `IMG_${i}_09.jpg`,
+          `IMG_${i}_10.jpg`,
+          `IMG_${i}_11.jpg`,
+          `IMG_${i}_12.jpg`,
+          `IMG_${i}_13.jpg`,
+          `IMG_${i}_14.jpg`,
+          `IMG_${i}_15.jpg`,
+        ]);
+      }
     }
 
     // 2nd sheet: Colaboradores
@@ -1278,7 +1998,9 @@ app.post('/api/generate-sample', async (_req, res) => {
       ]);
     }
 
-    const sampleFileName = 'planilha_levantamento_exemplo.xlsx';
+    const sampleFileName = isSuperficial
+      ? 'planilha_drenagem_superficial_exemplo.xlsx'
+      : 'planilha_drenagem_profunda_exemplo.xlsx';
     const sampleFilePath = path.join(UPLOAD_DIR, `sample-${Date.now()}.xlsx`);
     await wb.xlsx.writeFile(sampleFilePath);
 
@@ -1305,6 +2027,7 @@ app.post('/api/generate-sample', async (_req, res) => {
       sheetNames,
       activeSheet,
       sheetDetails,
+      featureType,
     });
   } catch (error: any) {
     console.error('Error generating sample:', error);

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Search,
   CheckSquare,
@@ -14,37 +14,19 @@ import {
   Layers,
   Eye,
   Info,
-  SlidersHorizontal,
   Filter,
   Route,
+  Waves,
+  Sparkles,
 } from 'lucide-react';
-import { UploadResponse, SheetDetails, ColumnInfo } from '../types';
-
-export const DEFAULT_PRESET_FIELDS = [
-  'codAuto',
-  'km',
-  'Rodovia',
-  'repararEntorno',
-  'Limpeza.',
-  'CaixaDanificada.',
-  'TampaDanificada/Inxistente',
-  'EstadoConservacao',
-  'Foto1',
-  'Foto2',
-  'Foto3',
-  'Foto4',
-  'Foto5',
-  'Foto6',
-  'Foto7',
-  'Foto8',
-  'Foto9',
-  'Foto10',
-  'Foto11',
-  'Foto12',
-  'Foto13',
-  'Foto14',
-  'Foto15',
-] as const;
+import { UploadResponse, SheetDetails, ColumnInfo, DrainageFeatureType } from '../types';
+import {
+  DRAINAGE_FEATURES,
+  isDefaultPresetField,
+  normalizeColKey,
+  DRENAGEM_PROFUNDA_FIELDS,
+  DRENAGEM_SUPERFICIAL_FIELDS,
+} from '../constants/presets';
 
 export const ESTADO_CONSERVACAO_OPTIONS = [
   { value: '', label: 'Todas as linhas (Sem filtro)' },
@@ -53,46 +35,24 @@ export const ESTADO_CONSERVACAO_OPTIONS = [
   { value: 'PRECÁRIO', label: 'PRECÁRIO' },
 ] as const;
 
-export const normalizeColKey = (str: string): string => {
-  return str
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]/g, '');
-};
-
-const presetNormalizedSet = new Set(
-  DEFAULT_PRESET_FIELDS.map((f) => normalizeColKey(f))
-);
-
-export const isDefaultPresetField = (columnName: string): boolean => {
-  if (!columnName) return false;
-  const trimmed = columnName.trim();
-  for (const field of DEFAULT_PRESET_FIELDS) {
-    if (trimmed.toLowerCase() === field.toLowerCase()) {
-      return true;
-    }
-  }
-  const norm = normalizeColKey(trimmed);
-  if (presetNormalizedSet.has(norm)) return true;
-  // Also match variations such as 'tampadanificadainexistente' or 'tampadanificadainxistente'
-  if (norm === 'tampadanificadainxistente' || norm === 'tampadanificadainexistente') {
-    return true;
-  }
-  return false;
-};
-
 interface ColumnSelectionStepProps {
   uploadData: UploadResponse;
+  initialFeatureType?: DrainageFeatureType;
+  onFeatureChange?: (feature: DrainageFeatureType) => void;
   onBackToUpload: () => void;
   onProcessComplete: (result: any) => void;
 }
 
 export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
   uploadData,
+  initialFeatureType = 'drenagem_profunda',
+  onFeatureChange,
   onBackToUpload,
   onProcessComplete,
 }) => {
+  const [featureType, setFeatureType] = useState<DrainageFeatureType>(
+    uploadData.featureType || initialFeatureType
+  );
   const [activeSheet, setActiveSheet] = useState<string>(uploadData.activeSheet);
   const [sheetDetails, setSheetDetails] = useState<SheetDetails>(uploadData.sheetDetails);
   const [isLoadingSheet, setIsLoadingSheet] = useState(false);
@@ -114,6 +74,8 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingError, setProcessingError] = useState<string | null>(null);
 
+  const featureConfig = DRAINAGE_FEATURES[featureType];
+
   // Switch sheet
   const handleSheetChange = async (newSheetName: string) => {
     if (newSheetName === activeSheet || isLoadingSheet) return;
@@ -121,29 +83,36 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
     setProcessingError(null);
     try {
       const res = await fetch(
-        `/api/sheet-preview?fileId=${encodeURIComponent(uploadData.fileId)}&sheetName=${encodeURIComponent(
-          newSheetName
-        )}`
+        `/api/sheet-details/${uploadData.fileId}/${encodeURIComponent(newSheetName)}`
       );
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.error || 'Falha ao carregar a aba selecionada.');
+        throw new Error(err.error || 'Erro ao carregar detalhes da aba.');
       }
-      const data = await res.json();
+      const newDetails: SheetDetails = await res.json();
       setActiveSheet(newSheetName);
-      setSheetDetails(data.sheetDetails);
-      setSelectedForKeeping(new Set()); // Reset: all columns default to "Remover"
+      setSheetDetails(newDetails);
+      // Reset selections and filters for new sheet
+      setSelectedForKeeping(new Set());
       setEstadoFilter('');
       setRodoviaFilter('');
-    } catch (e: any) {
-      setProcessingError(e.message || 'Erro ao alternar aba.');
+      setSearchQuery('');
+    } catch (err: any) {
+      setProcessingError(err.message || 'Falha ao trocar de aba.');
     } finally {
       setIsLoadingSheet(false);
     }
   };
 
-  // Toggle single column keeping
-  const toggleColumnKeeping = (colIndex: number) => {
+  const handleFeatureSwitch = (newFeature: DrainageFeatureType) => {
+    setFeatureType(newFeature);
+    if (onFeatureChange) {
+      onFeatureChange(newFeature);
+    }
+  };
+
+  // Toggle keeping a single column
+  const handleToggleColumn = (colIndex: number) => {
     setSelectedForKeeping((prev) => {
       const next = new Set(prev);
       if (next.has(colIndex)) {
@@ -155,36 +124,45 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
     });
   };
 
-  // 1. Keep all columns (select all for keeping)
-  const handleKeepAll = () => {
-    const allIndices = sheetDetails.columns.map((c) => c.index);
-    setSelectedForKeeping(new Set(allIndices));
-  };
-
-  // 2. Remove all columns (deselect all, reset to initial state)
-  const handleRemoveAll = () => {
-    setSelectedForKeeping(new Set());
-  };
-
-  // 3. Invert selection (swap "Manter" <-> "Remover")
-  const handleInvertSelection = () => {
+  // Select all visible columns
+  const handleSelectAllVisible = () => {
     setSelectedForKeeping((prev) => {
-      const next = new Set<number>();
-      sheetDetails.columns.forEach((c) => {
-        if (!prev.has(c.index)) {
-          next.add(c.index);
+      const next = new Set(prev);
+      filteredColumns.forEach((col) => next.add(col.index));
+      return next;
+    });
+  };
+
+  // Deselect all visible columns (mark all for removal)
+  const handleDeselectAllVisible = () => {
+    setSelectedForKeeping((prev) => {
+      const next = new Set(prev);
+      filteredColumns.forEach((col) => next.delete(col.index));
+      return next;
+    });
+  };
+
+  // Invert selection on visible columns
+  const handleInvertVisible = () => {
+    setSelectedForKeeping((prev) => {
+      const next = new Set(prev);
+      filteredColumns.forEach((col) => {
+        if (next.has(col.index)) {
+          next.delete(col.index);
+        } else {
+          next.add(col.index);
         }
       });
       return next;
     });
   };
 
-  // Indices of columns in this sheet matching the default preset fields
+  // Indices of columns in this sheet matching the active feature's preset fields
   const presetMatchingIndices = useMemo(() => {
     return sheetDetails.columns
-      .filter((col) => isDefaultPresetField(col.name))
+      .filter((col) => isDefaultPresetField(col.name, featureType))
       .map((col) => col.index);
-  }, [sheetDetails.columns]);
+  }, [sheetDetails.columns, featureType]);
 
   const matchedPresetCount = presetMatchingIndices.length;
 
@@ -267,28 +245,29 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
     );
   }, [sheetDetails.rodoviaOptions, sheetDetails.previewRows, rodoviaColRelativeIdx]);
 
-  // Count how many preview rows match both active filters in conjunction
-  const matchingPreviewRowsCount = useMemo(() => {
-    if (!estadoFilter && !rodoviaFilter) {
-      return sheetDetails.previewRows.length;
+  // Count how many TOTAL rows in the ENTIRE sheet match both active filters in conjunction
+  const matchingRealRowsCount = useMemo(() => {
+    if (!sheetDetails.rowFiltersData || sheetDetails.rowFiltersData.length === 0) {
+      return sheetDetails.totalRows;
     }
-    return sheetDetails.previewRows.filter((r) => {
+    if (!estadoFilter && !rodoviaFilter) {
+      return sheetDetails.totalRows;
+    }
+    return sheetDetails.rowFiltersData.filter((item) => {
       let matchesEstado = true;
       let matchesRodovia = true;
 
-      if (estadoFilter && estadoColRelativeIdx >= 0) {
-        const cellVal = r[estadoColRelativeIdx];
-        matchesEstado = normalizeColKey(String(cellVal || '')) === normalizeColKey(estadoFilter);
+      if (estadoFilter) {
+        matchesEstado = normalizeColKey(item.e) === normalizeColKey(estadoFilter);
       }
 
-      if (rodoviaFilter && rodoviaColRelativeIdx >= 0) {
-        const cellVal = r[rodoviaColRelativeIdx];
-        matchesRodovia = normalizeColKey(String(cellVal || '')) === normalizeColKey(rodoviaFilter);
+      if (rodoviaFilter) {
+        matchesRodovia = normalizeColKey(item.r) === normalizeColKey(rodoviaFilter);
       }
 
       return matchesEstado && matchesRodovia;
     }).length;
-  }, [estadoFilter, rodoviaFilter, estadoColRelativeIdx, rodoviaColRelativeIdx, sheetDetails.previewRows]);
+  }, [estadoFilter, rodoviaFilter, sheetDetails.rowFiltersData, sheetDetails.totalRows]);
 
   const totalColumns = sheetDetails.columns.length;
   const keptCount = selectedForKeeping.size;
@@ -324,6 +303,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
           columnIndicesToRemove,
           estadoConservacaoFilter: estadoFilter.trim() !== '' ? estadoFilter : null,
           rodoviaFilter: rodoviaFilter.trim() !== '' ? rodoviaFilter : null,
+          featureType,
         }),
       });
 
@@ -333,6 +313,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
       }
 
       const result = await res.json();
+      result.featureType = featureType;
       onProcessComplete(result);
     } catch (err: any) {
       setProcessingError(err.message || 'Falha ao processar arquivo.');
@@ -342,7 +323,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
 
   return (
     <div className="w-full max-w-6xl mx-auto space-y-6">
-      {/* File & Sheet Overview Bar */}
+      {/* File & Feature Overview Bar */}
       <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-6 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="flex items-start sm:items-center gap-3">
           <div className="w-11 h-11 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0 border border-emerald-200/60">
@@ -356,6 +337,14 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
               <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full font-medium">
                 {(uploadData.fileSize / (1024 * 1024)).toFixed(2)} MB
               </span>
+              <span className="text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                {featureType === 'drenagem_superficial' ? (
+                  <Waves className="w-3 h-3 text-emerald-700" />
+                ) : (
+                  <Layers className="w-3 h-3 text-emerald-700" />
+                )}
+                {featureConfig.name}
+              </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
               Planilha carregada • {uploadData.sheetNames.length}{' '}
@@ -364,14 +353,29 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={onBackToUpload}
-          className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 px-3 py-2 rounded-xl hover:bg-slate-100 transition-colors border border-slate-200 cursor-pointer"
-        >
-          <ArrowLeft className="w-3.5 h-3.5" />
-          <span>Trocar de arquivo</span>
-        </button>
+        <div className="flex items-center gap-2 self-stretch sm:self-auto justify-end flex-wrap">
+          {/* Feature selector dropdown in step 2 */}
+          <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs">
+            <span className="text-slate-500 font-semibold hidden sm:inline">Modo:</span>
+            <select
+              value={featureType}
+              onChange={(e) => handleFeatureSwitch(e.target.value as DrainageFeatureType)}
+              className="bg-transparent font-bold text-slate-800 focus:outline-none cursor-pointer"
+            >
+              <option value="drenagem_profunda">Drenagem Profunda</option>
+              <option value="drenagem_superficial">Drenagem Superficial</option>
+            </select>
+          </div>
+
+          <button
+            type="button"
+            onClick={onBackToUpload}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 px-3 py-2 rounded-xl hover:bg-slate-100 transition-colors border border-slate-200 cursor-pointer"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Trocar arquivo</span>
+          </button>
+        </div>
       </div>
 
       {/* Sheet Tabs Selector */}
@@ -447,7 +451,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
             >
               <span className="flex items-center gap-1.5">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                Serão mantidas: <strong>{keptCount}</strong>
+                A manter: <strong>{keptCount}</strong>
               </span>
             </div>
             <div
@@ -465,8 +469,9 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
           </div>
         </div>
 
-        {/* Caixa de Seleção para Seleção Padrão */}
+        {/* 1. Caixa de Seleção para Seleção Padrão (Drenagem Profunda ou Superficial) */}
         <div
+          id="card-selecao-padrao"
           className={`p-4 rounded-xl border transition-all ${
             isPresetActive
               ? 'bg-emerald-50/90 border-emerald-300 ring-1 ring-emerald-400/25 shadow-xs'
@@ -490,7 +495,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
               <div className="space-y-0.5">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-bold text-slate-900 group-hover:text-emerald-800 transition-colors">
-                    Seleção Padrão
+                    Seleção Padrão — {featureConfig.name}
                   </span>
                   <span
                     className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
@@ -499,7 +504,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                         : 'bg-slate-200 text-slate-700'
                     }`}
                   >
-                    {matchedPresetCount} de {DEFAULT_PRESET_FIELDS.length} campos identificados nesta aba
+                    {matchedPresetCount} de {featureConfig.fields.length} campos identificados nesta aba
                   </span>
                   {isPresetActive && (
                     <span className="text-[10px] bg-emerald-600 text-white font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
@@ -509,9 +514,11 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                   )}
                 </div>
                 <p className="text-xs text-slate-600 leading-relaxed">
-                  Campos selecionados para manter:{' '}
+                  Campos mantidos pela feature:{' '}
                   <span className="font-mono text-[11px] text-slate-800 bg-white/70 px-1.5 py-0.5 rounded border border-slate-200/60 inline-block mt-0.5">
-                    codAuto, km, Rodovia, repararEntorno, Limpeza., CaixaDanificada., TampaDanificada/Inxistente, EstadoConservacao, Foto1 a Foto15
+                    {featureType === 'drenagem_superficial'
+                      ? 'codAuto, Elemento, km, Rodovia, Sentido, ExtensaoReparar, ExtensaoLimpeza, EstadoConservacao, Foto1 a Foto15'
+                      : 'codAuto, km, Rodovia, Sentido, repararEntorno, Limpeza., CaixaDanificada., TampaDanificada/Inxistente, EstadoConservacao, Foto1 a Foto15'}
                   </span>
                 </p>
               </div>
@@ -526,12 +533,12 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                   : 'bg-white hover:bg-emerald-50 text-emerald-800 border-emerald-200 shadow-2xs'
               }`}
             >
-              {isPresetActive ? 'Padrão Aplicado' : 'Aplicar Seleção Padrão'}
+              {isPresetActive ? 'Padrão Aplicado' : `Aplicar Seleção Padrão (${featureConfig.name})`}
             </button>
           </div>
         </div>
 
-        {/* Caixa de Seleção para Filtro de Linhas: Rodovia */}
+        {/* 2. Caixa de Seleção para Filtro de Linhas: Rodovia */}
         <div
           id="card-filtro-rodovia"
           className={`p-4 rounded-xl border transition-all ${
@@ -585,12 +592,11 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                 <p className="text-xs text-slate-600 leading-relaxed">
                   {rodoviaFilter ? (
                     <span>
-                      O filtro será aplicado na coluna <strong>"Rodovia"</strong> e selecionará{' '}
-                      <strong className="text-sky-900 font-semibold">apenas as linhas que correspondem a "{rodoviaFilter}"</strong>. As demais linhas serão removidas do arquivo final.
+                      O filtro selecionará <strong className="text-sky-900 font-bold">{sheetDetails.rodoviaCounts?.[rodoviaFilter]?.toLocaleString('pt-BR') ?? '—'} linhas</strong> de {sheetDetails.totalRows.toLocaleString('pt-BR')} na planilha final. As demais linhas serão removidas do arquivo final.
                     </span>
                   ) : (
                     <span>
-                      Nenhum filtro de rodovia aplicado: <strong>todas as linhas serão selecionadas</strong> e o aplicativo é executado normalmente.
+                      Nenhum filtro de rodovia aplicado: <strong>todas as {sheetDetails.totalRows.toLocaleString('pt-BR')} linhas</strong> da planilha serão selecionadas.
                     </span>
                   )}
                 </p>
@@ -604,57 +610,39 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                   id="select-rodovia"
                   value={rodoviaFilter}
                   onChange={(e) => setRodoviaFilter(e.target.value)}
-                  className={`w-full sm:w-56 pl-3 pr-8 py-2 text-xs font-semibold rounded-xl border focus:outline-none focus:ring-2 transition-all cursor-pointer bg-white ${
+                  className={`w-full sm:w-64 pl-3 pr-8 py-2 text-xs font-semibold rounded-xl border focus:outline-none focus:ring-2 transition-all cursor-pointer bg-white ${
                     rodoviaFilter
                       ? 'border-sky-400 text-sky-950 ring-2 ring-sky-400/25 shadow-xs font-bold'
                       : 'border-slate-300 text-slate-700 focus:border-sky-500 focus:ring-sky-500/20'
                   }`}
                 >
-                  <option value="">Todas as rodovias (Sem filtro)</option>
-                  {availableRodovias.map((rodovia) => (
-                    <option key={rodovia} value={rodovia}>
-                      {rodovia}
-                    </option>
-                  ))}
+                  <option value="">Todas as rodovias ({sheetDetails.totalRows.toLocaleString('pt-BR')} linhas)</option>
+                  {availableRodovias.map((rodovia) => {
+                    const count = sheetDetails.rodoviaCounts?.[rodovia];
+                    return (
+                      <option key={rodovia} value={rodovia}>
+                        {rodovia} {count !== undefined ? `(${count.toLocaleString('pt-BR')} ${count === 1 ? 'linha' : 'linhas'})` : ''}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
-              {/* Quick option pill buttons (shows up to 4 rodovias for rapid access) */}
-              <div className="flex items-center gap-1 bg-white/90 p-1 rounded-xl border border-slate-200 self-start sm:self-center flex-wrap">
+              {rodoviaFilter && (
                 <button
                   type="button"
                   onClick={() => setRodoviaFilter('')}
-                  className={`px-2.5 py-1 text-[11px] rounded-lg font-semibold transition-all cursor-pointer ${
-                    !rodoviaFilter
-                      ? 'bg-slate-800 text-white shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                  }`}
+                  className="px-2.5 py-2 text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl font-medium border border-slate-200 transition-colors"
+                  title="Remover filtro de rodovia"
                 >
-                  Todas
+                  Limpar
                 </button>
-                {availableRodovias.slice(0, 4).map((rod) => {
-                  const isSelected = rodoviaFilter === rod;
-                  return (
-                    <button
-                      key={rod}
-                      type="button"
-                      onClick={() => setRodoviaFilter(rod)}
-                      className={`px-2.5 py-1 text-[11px] rounded-lg font-semibold transition-all cursor-pointer ${
-                        isSelected
-                          ? 'bg-sky-600 text-white shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                      }`}
-                    >
-                      {rod}
-                    </button>
-                  );
-                })}
-              </div>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Caixa de Seleção para Filtro de Linhas: EstadoConservacao */}
+        {/* 3. Caixa de Seleção para Filtro de Linhas: EstadoConservacao */}
         <div
           id="card-filtro-estado-conservacao"
           className={`p-4 rounded-xl border transition-all ${
@@ -707,12 +695,11 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                 <p className="text-xs text-slate-600 leading-relaxed">
                   {estadoFilter ? (
                     <span>
-                      O filtro será aplicado na coluna <strong>"EstadoConservacao"</strong> e selecionará{' '}
-                      <strong className="text-amber-900 font-semibold">apenas as linhas que correspondem a "{estadoFilter}"</strong>. As demais linhas serão removidas do arquivo final.
+                      O filtro selecionará <strong className="text-amber-900 font-bold">{sheetDetails.estadoCounts?.[estadoFilter]?.toLocaleString('pt-BR') ?? '—'} linhas</strong> de {sheetDetails.totalRows.toLocaleString('pt-BR')} na planilha final. As demais linhas serão removidas do arquivo final.
                     </span>
                   ) : (
                     <span>
-                      Nenhum filtro aplicado: <strong>todas as linhas serão selecionadas</strong> e o aplicativo é executado normalmente.
+                      Nenhum filtro aplicado: <strong>todas as {sheetDetails.totalRows.toLocaleString('pt-BR')} linhas</strong> da planilha serão selecionadas.
                     </span>
                   )}
                 </p>
@@ -726,17 +713,25 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                   id="select-estado-conservacao"
                   value={estadoFilter}
                   onChange={(e) => setEstadoFilter(e.target.value)}
-                  className={`w-full sm:w-52 pl-3 pr-8 py-2 text-xs font-semibold rounded-xl border focus:outline-none focus:ring-2 transition-all cursor-pointer bg-white ${
+                  className={`w-full sm:w-60 pl-3 pr-8 py-2 text-xs font-semibold rounded-xl border focus:outline-none focus:ring-2 transition-all cursor-pointer bg-white ${
                     estadoFilter
                       ? 'border-amber-400 text-amber-950 ring-2 ring-amber-400/25 shadow-xs font-bold'
                       : 'border-slate-300 text-slate-700 focus:border-amber-500 focus:ring-amber-500/20'
                   }`}
                 >
-                  {ESTADO_CONSERVACAO_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
+                  {ESTADO_CONSERVACAO_OPTIONS.map((opt) => {
+                    let count: number | undefined;
+                    if (!opt.value) {
+                      count = sheetDetails.totalRows;
+                    } else if (sheetDetails.estadoCounts) {
+                      count = sheetDetails.estadoCounts[opt.value];
+                    }
+                    return (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label} {count !== undefined ? `(${count.toLocaleString('pt-BR')} ${count === 1 ? 'linha' : 'linhas'})` : ''}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
@@ -772,7 +767,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
             <div className="flex items-center gap-2.5 flex-wrap">
               <span className="font-bold flex items-center gap-1.5 text-indigo-900">
                 <Filter className="w-3.5 h-3.5 text-indigo-700" />
-                Filtros trabalhando em conjunto:
+                Filtragem final da planilha:
               </span>
               {rodoviaFilter && (
                 <span className="bg-sky-100 text-sky-950 border border-sky-300 font-bold px-2 py-0.5 rounded-md flex items-center gap-1">
@@ -791,8 +786,8 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
               )}
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <span className="text-slate-600">
-                Prévia: <strong className="text-indigo-950 font-bold">{matchingPreviewRowsCount}</strong> de {sheetDetails.previewRows.length} linhas atendem aos critérios combinados
+              <span className="text-slate-700">
+                Planilha final: <strong className="text-indigo-950 font-bold text-sm">{matchingRealRowsCount.toLocaleString('pt-BR')}</strong> de {sheetDetails.totalRows.toLocaleString('pt-BR')} linhas totais mantidas
               </span>
               <button
                 type="button"
@@ -815,130 +810,125 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
+              placeholder="Buscar coluna por nome ou letra..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Pesquisar colunas pelo nome..."
-              className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 bg-slate-50/50"
+              className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 bg-white"
             />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-slate-600 cursor-pointer"
-              >
-                Limpar
-              </button>
-            )}
           </div>
 
-          {/* Quick Buttons */}
+          {/* Quick Selection Buttons */}
           <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
-              onClick={handleApplyDefaultPreset}
-              className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl transition-colors cursor-pointer border ${
-                isPresetActive
-                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                  : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200'
-              }`}
-              title="Manter apenas as colunas da Seleção Padrão"
+              onClick={handleSelectAllVisible}
+              className="px-3 py-1.5 rounded-lg border border-slate-300 hover:border-emerald-500 hover:bg-emerald-50/50 text-slate-700 text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
             >
               <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Seleção Padrão ({matchedPresetCount})</span>
+              <span>Manter Todas</span>
             </button>
-
             <button
               type="button"
-              onClick={handleKeepAll}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
-              title="Manter todas as colunas na planilha"
+              onClick={handleDeselectAllVisible}
+              className="px-3 py-1.5 rounded-lg border border-slate-300 hover:border-rose-400 hover:bg-rose-50/50 text-slate-700 text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
             >
-              <CheckSquare className="w-3.5 h-3.5 text-slate-600" />
-              <span>Manter todas</span>
+              <Square className="w-3.5 h-3.5 text-rose-500" />
+              <span>Remover Todas</span>
             </button>
-
             <button
               type="button"
-              onClick={handleRemoveAll}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 transition-colors cursor-pointer"
-              title="Remover todas as colunas (marcar todas para remoção)"
+              onClick={handleInvertVisible}
+              className="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
             >
-              <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-              <span>Remover todas</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleInvertSelection}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
-              title="Inverter seleção entre Manter e Remover"
-            >
-              <ArrowLeftRight className="w-3.5 h-3.5 text-slate-600" />
+              <ArrowLeftRight className="w-3.5 h-3.5 text-slate-500" />
               <span>Inverter</span>
             </button>
           </div>
         </div>
 
-        {/* Checkbox Grid of Columns */}
-        <div className="border border-slate-200 rounded-xl p-3 bg-slate-50/60 max-h-56 overflow-y-auto scrollbar-thin">
-          {filteredColumns.length === 0 ? (
-            <div className="py-6 text-center text-xs text-slate-400">
-              Nenhuma coluna encontrada com o termo "{searchQuery}".
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-              {filteredColumns.map((col) => {
-                const isKept = selectedForKeeping.has(col.index);
-                const isPreset = isDefaultPresetField(col.name);
-                return (
-                  <label
-                    key={col.index}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      toggleColumnKeeping(col.index);
-                    }}
-                    className={`flex items-center gap-2 p-2 rounded-lg text-xs font-medium border transition-all cursor-pointer select-none ${
+        {/* Column Grid */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-xs text-slate-500 px-1">
+            <span>
+              Exibindo {filteredColumns.length} de {totalColumns} colunas
+            </span>
+            <span className="text-[11px] text-slate-400">
+              Verde = Manter • Vermelho / Riscado = Remover
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 max-h-[440px] overflow-y-auto p-1 border border-slate-200 rounded-xl bg-slate-50/50 scrollbar-thin">
+            {filteredColumns.map((col) => {
+              const isKept = selectedForKeeping.has(col.index);
+              const isPreset = isDefaultPresetField(col.name, featureType);
+
+              return (
+                <div
+                  key={col.index}
+                  onClick={() => handleToggleColumn(col.index)}
+                  className={`p-3 rounded-xl border transition-all cursor-pointer select-none flex items-start justify-between gap-2 shadow-2xs ${
+                    isKept
+                      ? 'bg-emerald-50/90 border-emerald-300 ring-1 ring-emerald-400/25'
+                      : 'bg-white border-slate-200 hover:border-slate-300 opacity-75'
+                  }`}
+                >
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <div
+                      className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 mt-0.5 border transition-colors ${
+                        isKept
+                          ? 'bg-emerald-600 text-white border-emerald-600'
+                          : 'border-slate-300 bg-white text-transparent'
+                      }`}
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                    </div>
+
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] font-mono font-bold text-slate-400 bg-slate-100 px-1.5 py-0.2 rounded">
+                          {col.letter}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          #{col.index + 1}
+                        </span>
+                        {isPreset && (
+                          <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-1 py-0.2 rounded">
+                            Padrão
+                          </span>
+                        )}
+                      </div>
+                      <div
+                        className={`text-xs font-semibold truncate mt-0.5 ${
+                          isKept
+                            ? 'text-slate-900 font-bold'
+                            : 'text-slate-500 line-through'
+                        }`}
+                        title={col.name}
+                      >
+                        {col.name || <span className="italic text-slate-400">(Sem nome)</span>}
+                      </div>
+                    </div>
+                  </div>
+
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
                       isKept
-                        ? 'bg-emerald-50/90 border-emerald-300 text-emerald-950 shadow-2xs'
-                        : 'bg-rose-50/60 border-rose-200/80 text-rose-900 hover:bg-rose-100/60'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-rose-50 text-rose-600 border border-rose-200'
                     }`}
                   >
-                    <input
-                      type="checkbox"
-                      checked={isKept}
-                      readOnly
-                      className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 pointer-events-none"
-                    />
-                    <span className="text-[10px] font-mono text-slate-400 shrink-0 w-5">
-                      [{col.letter}]
-                    </span>
-                    <span
-                      className={`truncate flex-1 ${
-                        !isKept ? 'line-through text-rose-800/80' : 'font-semibold text-emerald-950'
-                      }`}
-                      title={col.name}
-                    >
-                      {col.name}
-                    </span>
-                    {isPreset && (
-                      <span className="text-[9px] text-emerald-800 bg-emerald-100 border border-emerald-300 px-1 py-0.2 rounded font-bold shrink-0" title="Campo presente na Seleção Padrão">
-                        Padrão
-                      </span>
-                    )}
-                    {isKept ? (
-                      <span className="text-[10px] text-emerald-800 font-bold shrink-0 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200">
-                        Manter
-                      </span>
-                    ) : (
-                      <span className="text-[10px] text-rose-700 font-bold shrink-0 bg-rose-100 px-1.5 py-0.5 rounded border border-rose-200">
-                        Remover
-                      </span>
-                    )}
-                  </label>
-                );
-              })}
-            </div>
-          )}
+                    {isKept ? 'Manter' : 'Remover'}
+                  </span>
+                </div>
+              );
+            })}
+
+            {filteredColumns.length === 0 && (
+              <div className="col-span-full p-8 text-center text-slate-400 text-xs">
+                Nenhuma coluna encontrada com o termo "{searchQuery}".
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -954,10 +944,10 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
               Mostrando {sheetDetails.previewRows.length} de{' '}
               {sheetDetails.totalRows.toLocaleString('pt-BR')} linhas
             </span>
-            {estadoFilter && (
-              <span className="text-xs bg-amber-100 text-amber-900 border border-amber-300 font-semibold px-2 py-0.5 rounded-full flex items-center gap-1">
-                <Filter className="w-3 h-3 text-amber-700" />
-                Filtro: {estadoFilter} ({matchingPreviewRowsCount} de {sheetDetails.previewRows.length} na prévia)
+            {(rodoviaFilter || estadoFilter) && (
+              <span className="text-xs bg-indigo-100 text-indigo-950 border border-indigo-300 font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                <Filter className="w-3 h-3 text-indigo-700" />
+                Filtrando {matchingRealRowsCount.toLocaleString('pt-BR')} de {sheetDetails.totalRows.toLocaleString('pt-BR')} linhas no arquivo final
               </span>
             )}
           </div>
@@ -973,9 +963,9 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
         <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
           <div className="overflow-x-auto max-h-[380px] scrollbar-thin">
             <table className="w-full text-left text-xs border-collapse">
-              <thead className="bg-slate-100/90 sticky top-0 z-10 text-slate-700 shadow-xs">
-                <tr>
-                  <th className="p-2.5 font-bold border-b border-r border-slate-200 bg-slate-200/80 text-slate-500 text-center w-12 shrink-0">
+              <thead>
+                <tr className="bg-slate-100 border-b border-slate-200 text-slate-700 font-semibold sticky top-0 z-10">
+                  <th className="p-2 border-r border-slate-200 text-center w-12 bg-slate-100 text-[11px]">
                     #
                   </th>
                   {sheetDetails.columns.map((col) => {
@@ -983,37 +973,25 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                     return (
                       <th
                         key={col.index}
-                        onClick={() => toggleColumnKeeping(col.index)}
-                        className={`p-2.5 border-b border-r border-slate-200 font-bold whitespace-nowrap cursor-pointer transition-colors ${
+                        onClick={() => handleToggleColumn(col.index)}
+                        className={`p-2.5 border-r border-slate-200 transition-colors cursor-pointer select-none whitespace-nowrap min-w-[140px] max-w-[240px] ${
                           isKept
-                            ? 'bg-emerald-100/90 text-emerald-950'
-                            : 'bg-rose-100/90 hover:bg-rose-200/80 text-rose-900'
+                            ? 'bg-emerald-100/90 text-emerald-950 border-b-2 border-b-emerald-600'
+                            : 'bg-rose-50/70 text-rose-700 opacity-60 border-b-2 border-b-rose-400'
                         }`}
                       >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="text-[10px] font-mono text-slate-500">
-                              {col.letter}
+                        <div className="flex items-center justify-between gap-1.5">
+                          <div className="truncate font-bold">
+                            <span className="text-[10px] font-mono text-slate-500 mr-1">
+                              [{col.letter}]
                             </span>
-                            <span
-                              className={`truncate max-w-[160px] ${
-                                !isKept ? 'line-through text-rose-800' : 'font-bold'
-                              }`}
-                              title={col.name}
-                            >
-                              {col.name}
-                            </span>
-                            {isDefaultPresetField(col.name) && (
-                              <span className="text-[8px] bg-emerald-700 text-white px-1 py-0.2 rounded uppercase font-semibold shrink-0">
-                                Padrão
-                              </span>
-                            )}
+                            <span>{col.name}</span>
                           </div>
                           <span
                             className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider shrink-0 ${
                               isKept
-                                ? 'bg-emerald-200 text-emerald-900 border border-emerald-300'
-                                : 'bg-rose-200 text-rose-900 border border-rose-300'
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-rose-200 text-rose-900'
                             }`}
                           >
                             {isKept ? 'Manter' : 'Remover'}
@@ -1036,46 +1014,12 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                   </tr>
                 ) : (
                   sheetDetails.previewRows.map((row, rIdx) => {
-                    const estadoCellVal = estadoColRelativeIdx >= 0 ? row[estadoColRelativeIdx] : undefined;
-                    const rodoviaCellVal = rodoviaColRelativeIdx >= 0 ? row[rodoviaColRelativeIdx] : undefined;
-
-                    const matchesEstado =
-                      !estadoFilter ||
-                      (estadoColRelativeIdx >= 0 &&
-                        normalizeColKey(String(estadoCellVal || '')) === normalizeColKey(estadoFilter));
-
-                    const matchesRodovia =
-                      !rodoviaFilter ||
-                      (rodoviaColRelativeIdx >= 0 &&
-                        normalizeColKey(String(rodoviaCellVal || '')) === normalizeColKey(rodoviaFilter));
-
-                    const rowMatchesFilter = matchesEstado && matchesRodovia;
-
-                    let discardReason = '';
-                    if (!rowMatchesFilter) {
-                      const reasons: string[] = [];
-                      if (!matchesRodovia) {
-                        reasons.push(`Rodovia = "${rodoviaCellVal || 'vazio'}" (filtro: "${rodoviaFilter}")`);
-                      }
-                      if (!matchesEstado) {
-                        reasons.push(`EstadoConservacao = "${estadoCellVal || 'vazio'}" (filtro: "${estadoFilter}")`);
-                      }
-                      discardReason = `Linha descartada: ${reasons.join(' e ')}`;
-                    }
-
                     return (
                       <tr
                         key={rIdx}
                         className={`transition-colors ${
-                          !rowMatchesFilter
-                            ? 'bg-slate-100/70 opacity-40 line-through'
-                            : (estadoFilter || rodoviaFilter)
-                            ? 'bg-indigo-50/30 hover:bg-indigo-50/60'
-                            : rIdx % 2 === 0
-                            ? 'bg-white'
-                            : 'bg-slate-50/50'
-                        }`}
-                        title={discardReason || undefined}
+                          rIdx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'
+                        } hover:bg-slate-100/60`}
                       >
                         <td className="p-2 border-r border-slate-200 text-slate-400 font-mono text-center text-[11px] bg-slate-50">
                           {rIdx + 1}
@@ -1129,14 +1073,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
             <strong className="text-emerald-700 font-bold">{keptCount} colunas</strong>
             {rodoviaFilter || estadoFilter ? (
               <span>
-                {' '}e apenas as linhas correspondentes a{' '}
-                {rodoviaFilter && (
-                  <strong className="text-sky-900 font-bold">Rodovia = "{rodoviaFilter}"</strong>
-                )}
-                {rodoviaFilter && estadoFilter && ' e '}
-                {estadoFilter && (
-                  <strong className="text-amber-900 font-bold">EstadoConservacao = "{estadoFilter}"</strong>
-                )}
+                {' '}e <strong className="text-indigo-900 font-bold">{matchingRealRowsCount.toLocaleString('pt-BR')} de {sheetDetails.totalRows.toLocaleString('pt-BR')} linhas</strong> na planilha final ({sheetDetails.totalRows - matchingRealRowsCount} linhas serão removidas pelos filtros).
               </span>
             ) : (
               <span>
@@ -1147,10 +1084,10 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                 (todas as linhas)
               </span>
             )}{' '}
-            na nova planilha.
+            no arquivo gerado de <strong className="text-slate-800 font-semibold">{featureConfig.name}</strong>.
           </div>
           <div className="text-[11px] text-slate-400 mt-0.5">
-            A planilha original não será alterada. Um novo arquivo XLSX será criado.
+            A planilha original não será alterada. Um novo arquivo XLSX será criado com cursor posicionado na célula A1.
           </div>
         </div>
 
@@ -1168,11 +1105,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
           ) : (
             <>
               <CheckCircle2 className="w-4 h-4" />
-              <span>
-                {rodoviaFilter || estadoFilter
-                  ? 'Aplicar filtros e gerar arquivo'
-                  : 'Remover colunas e gerar arquivo'}
-              </span>
+              <span>Gerar Nova Planilha ({keptCount} colunas mantidas)</span>
             </>
           )}
         </button>

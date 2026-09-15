@@ -3,6 +3,7 @@ import {
   Download,
   CheckCircle,
   FileSpreadsheet,
+  FileText,
   Layers,
   Trash2,
   ListFilter,
@@ -28,6 +29,7 @@ export const DownloadStep: React.FC<DownloadStepProps> = ({
   onBackToSelect,
 }) => {
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const formatFileSize = (bytes?: number) => {
@@ -68,10 +70,49 @@ export const DownloadStep: React.FC<DownloadStepProps> = ({
     } catch (err: any) {
       console.error('Download error:', err);
       setDownloadError(
-        err.message || 'Ocorreu um erro ao baixar o arquivo. Por favor, tente novamente.'
+        err.message || 'Ocorreu um erro ao baixar a planilha. Por favor, tente novamente.'
       );
     } finally {
       setIsDownloading(false);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    setIsDownloadingPdf(true);
+    setDownloadError(null);
+
+    try {
+      const pdfUrl = result.pdfDownloadUrl || `/api/download-pdf/${result.downloadId}`;
+      const response = await fetch(pdfUrl);
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || `Erro HTTP ${response.status} ao gerar o arquivo PDF.`);
+      }
+
+      const blob = await response.blob();
+      if (blob.size === 0) {
+        throw new Error('O PDF gerado possui 0 bytes. Tente novamente.');
+      }
+
+      const pdfFileName = result.fileName.replace(/\.xlsx$/i, '') + '.pdf';
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = pdfFileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      setTimeout(() => {
+        window.URL.revokeObjectURL(url);
+      }, 10000);
+    } catch (err: any) {
+      console.error('PDF Download error:', err);
+      setDownloadError(
+        err.message || 'Ocorreu um erro ao gerar o relatório em PDF. Por favor, tente novamente.'
+      );
+    } finally {
+      setIsDownloadingPdf(false);
     }
   };
 
@@ -87,7 +128,7 @@ export const DownloadStep: React.FC<DownloadStepProps> = ({
           Planilha filtrada com sucesso!
         </h3>
         <p className="text-sm text-slate-600 mt-1.5 max-w-lg mx-auto">
-          As colunas selecionadas foram removidas. Todas as linhas, mídias (fotos JPG/PNG), formatações e fórmulas restantes foram preservadas com integridade total.
+          As colunas selecionadas foram mantidas com integridade total. Baixe a planilha tratada em Excel (.xlsx) ou gere o Relatório em PDF diagramado em formato Paisagem.
         </p>
 
         {downloadError && (
@@ -97,27 +138,51 @@ export const DownloadStep: React.FC<DownloadStepProps> = ({
           </div>
         )}
 
-        {/* Primary Download Button */}
-        <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
+        {/* Primary Download Buttons: Excel + PDF (Landscape) */}
+        <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3.5">
           <button
             type="button"
             onClick={handleDownload}
-            disabled={isDownloading}
-            className="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-70 text-white font-bold text-sm transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2.5 cursor-pointer"
+            disabled={isDownloading || isDownloadingPdf}
+            className="w-full sm:w-auto px-6 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-70 text-white font-bold text-sm transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2.5 cursor-pointer"
           >
             {isDownloading ? (
               <>
                 <Loader2 className="w-5 h-5 animate-spin" />
-                <span>Baixando arquivo ({formatFileSize(result.fileSize)})...</span>
+                <span>Baixando Excel ({formatFileSize(result.fileSize)})...</span>
               </>
             ) : (
               <>
                 <Download className="w-5 h-5" />
-                <span>Baixar arquivo Excel ({formatFileSize(result.fileSize)})</span>
+                <span>Baixar Planilha Excel ({formatFileSize(result.fileSize)})</span>
+              </>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleDownloadPdf}
+            disabled={isDownloading || isDownloadingPdf}
+            className="w-full sm:w-auto px-6 py-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 active:bg-slate-950 disabled:opacity-70 text-white font-bold text-sm transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2.5 cursor-pointer border border-slate-700"
+          >
+            {isDownloadingPdf ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin text-emerald-400" />
+                <span>Gerando PDF Paisagem...</span>
+              </>
+            ) : (
+              <>
+                <FileText className="w-5 h-5 text-emerald-400" />
+                <span>Gerar Relatório PDF (Paisagem)</span>
               </>
             )}
           </button>
         </div>
+
+        <p className="text-[11px] text-slate-500 mt-3 flex items-center justify-center gap-1.5">
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-600" />
+          PDF em formato Paisagem (A4) com exibição ampliada das fotos (Foto 1 a Foto 4) e dados cadastrais.
+        </p>
       </div>
 
       {/* Summary Cards */}
@@ -128,7 +193,7 @@ export const DownloadStep: React.FC<DownloadStepProps> = ({
             <span>Resumo do Processamento</span>
           </h4>
           <p className="text-xs text-slate-500 mt-0.5">
-            Métricas detalhadas da geração do novo arquivo XLSX
+            Métricas detalhadas da geração do novo arquivo XLSX e PDF
           </p>
         </div>
 

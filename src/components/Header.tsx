@@ -1,34 +1,41 @@
 import React from 'react';
-import { FileSpreadsheet, ShieldCheck } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
+import { EPR_PARANA_LOGO_BASE64 } from '../assets/logoEpr';
 
 export const Header: React.FC = () => {
   return (
     <header className="border-b border-slate-200 bg-white shadow-xs">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs">
-            <FileSpreadsheet className="w-6 h-6" />
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          {/* EPR Paraná Brand Logo */}
+          <div className="w-12 h-12 rounded-xl bg-[#072b4a] p-1 flex items-center justify-center shrink-0 shadow-sm border border-slate-700/20 overflow-hidden">
+            <img
+              src={EPR_PARANA_LOGO_BASE64}
+              alt="EPR Paraná"
+              className="w-full h-full object-contain"
+            />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-slate-900 tracking-tight">
-                Limpador de Planilhas Excel
+              <h1 className="text-lg font-bold text-slate-900 tracking-tight">
+                EPR Paraná <span className="text-slate-400 font-normal">|</span> Padronização de Drenagem
               </h1>
-              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                XLSX até 100 MB
+              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                XLSX & PDF
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              Filtre e remova colunas mantendo cabeçalhos, datas, números e todas as linhas intactas
+              Filtragem por rodovia e estado de conservação, preservação de fotos e exportação em Excel e PDF Paisagem
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2 text-xs font-medium text-emerald-800 bg-emerald-50/80 border border-emerald-200/80 px-3 py-1.5 rounded-lg">
           <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-          <span>Privacidade total: arquivos temporários excluídos após uso</span>
+          <span>EPR Paraná • Integridade de Fotos & Mídias</span>
         </div>
       </div>
     </header>
   );
 };
+
