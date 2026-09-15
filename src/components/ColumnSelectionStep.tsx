@@ -17,6 +17,7 @@ import {
   Filter,
   Route,
   Waves,
+  Milestone,
   Sparkles,
   Zap,
 } from 'lucide-react';
@@ -27,8 +28,15 @@ import {
   normalizeColKey,
   DRENAGEM_PROFUNDA_FIELDS,
   DRENAGEM_SUPERFICIAL_FIELDS,
+  SINALIZACAO_VERTICAL_FIELDS,
 } from '../constants/presets';
 import { TurboModeModal } from './TurboModeModal';
+
+export const SINALIZACAO_RETRORREFLETANCIA_OPTIONS = [
+  { value: '', label: 'Todas as linhas (Sem filtro)' },
+  { value: 'Aprovado', label: 'Aprovado' },
+  { value: 'Reprovado', label: 'Reprovado' },
+] as const;
 
 export const ESTADO_CONSERVACAO_OPTIONS = [
   { value: '', label: 'Todas as linhas (Sem filtro)' },
@@ -206,13 +214,20 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
     );
   }, [sheetDetails.columns, searchQuery]);
 
-  // Identify if EstadoConservacao column exists in this sheet
+  // Identify if EstadoConservacao / Situação Retrorrefletancia column exists in this sheet
   const estadoColInfo = useMemo(() => {
     return sheetDetails.columns.find((col) => {
       const norm = normalizeColKey(col.name);
+      if (featureType === 'sinalizacao_vertical') {
+        return (
+          norm === 'situacaoretrorrefletancia' ||
+          norm === 'situacaoretrorefletancia' ||
+          norm === 'retrorrefletancia'
+        );
+      }
       return norm === 'estadoconservacao' || norm === 'estadodeconservacao';
     });
-  }, [sheetDetails.columns]);
+  }, [sheetDetails.columns, featureType]);
 
   const estadoColRelativeIdx = useMemo(() => {
     if (!estadoColInfo || sheetDetails.columns.length === 0) return -1;
@@ -343,7 +358,9 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                 {(uploadData.fileSize / (1024 * 1024)).toFixed(2)} MB
               </span>
               <span className="text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 px-2.5 py-0.5 rounded-full flex items-center gap-1">
-                {featureType === 'drenagem_superficial' ? (
+                {featureType === 'sinalizacao_vertical' ? (
+                  <Milestone className="w-3 h-3 text-emerald-700" />
+                ) : featureType === 'drenagem_superficial' ? (
                   <Waves className="w-3 h-3 text-emerald-700" />
                 ) : (
                   <Layers className="w-3 h-3 text-emerald-700" />
@@ -380,6 +397,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
             >
               <option value="drenagem_profunda">Drenagem Profunda</option>
               <option value="drenagem_superficial">Drenagem Superficial</option>
+              <option value="sinalizacao_vertical">Sinalização Vertical</option>
             </select>
           </div>
 
@@ -532,7 +550,9 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                 <p className="text-xs text-slate-600 leading-relaxed">
                   Campos mantidos pela feature:{' '}
                   <span className="font-mono text-[11px] text-slate-800 bg-white/70 px-1.5 py-0.5 rounded border border-slate-200/60 inline-block mt-0.5">
-                    {featureType === 'drenagem_superficial'
+                    {featureType === 'sinalizacao_vertical'
+                      ? 'codAuto, rodovia, sentido, km, posicao, localizacao, lado, codigoTipo, materialSuporte, largura, altura, metro2, foto1 a foto7, Situação Retrorrefletancia, ObservacaoPlacaDanificada'
+                      : featureType === 'drenagem_superficial'
                       ? 'codAuto, Elemento, km, Rodovia, Sentido, ExtensaoReparar, ExtensaoLimpeza, EstadoConservacao, Foto1 a Foto15'
                       : 'codAuto, km, Rodovia, Sentido, repararEntorno, Limpeza., CaixaDanificada., TampaDanificada/Inxistente, EstadoConservacao, Foto1 a Foto15'}
                   </span>
@@ -658,7 +678,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
           </div>
         </div>
 
-        {/* 3. Caixa de Seleção para Filtro de Linhas: EstadoConservacao */}
+        {/* 3. Caixa de Seleção para Filtro de Linhas: EstadoConservacao / Situação Retrorrefletancia */}
         <div
           id="card-filtro-estado-conservacao"
           className={`p-4 rounded-xl border transition-all ${
@@ -685,7 +705,11 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                     htmlFor="select-estado-conservacao"
                     className="text-sm font-bold text-slate-900 cursor-pointer flex items-center gap-1.5"
                   >
-                    <span>Filtro de Linhas por Estado de Conservação</span>
+                    <span>
+                      {featureType === 'sinalizacao_vertical'
+                        ? 'Filtro de Linhas por Situação de Retrorrefletância'
+                        : 'Filtro de Linhas por Estado de Conservação'}
+                    </span>
                   </label>
                   {estadoFilter ? (
                     <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 border border-amber-300 flex items-center gap-1">
@@ -703,7 +727,9 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                     </span>
                   ) : (
                     <span className="text-[10px] text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded border border-amber-200">
-                      Coluna EstadoConservacao não encontrada nesta aba
+                      {featureType === 'sinalizacao_vertical'
+                        ? 'Coluna Situação Retrorrefletancia não encontrada nesta aba'
+                        : 'Coluna EstadoConservacao não encontrada nesta aba'}
                     </span>
                   )}
                 </div>
@@ -735,7 +761,10 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                       : 'border-slate-300 text-slate-700 focus:border-amber-500 focus:ring-amber-500/20'
                   }`}
                 >
-                  {ESTADO_CONSERVACAO_OPTIONS.map((opt) => {
+                  {(featureType === 'sinalizacao_vertical'
+                    ? SINALIZACAO_RETRORREFLETANCIA_OPTIONS
+                    : ESTADO_CONSERVACAO_OPTIONS
+                  ).map((opt) => {
                     let count: number | undefined;
                     if (!opt.value) {
                       count = sheetDetails.totalRows;
@@ -753,7 +782,10 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
 
               {/* Quick option pill buttons */}
               <div className="flex items-center gap-1 bg-white/90 p-1 rounded-xl border border-slate-200 self-start sm:self-center">
-                {ESTADO_CONSERVACAO_OPTIONS.map((opt) => {
+                {(featureType === 'sinalizacao_vertical'
+                  ? SINALIZACAO_RETRORREFLETANCIA_OPTIONS
+                  : ESTADO_CONSERVACAO_OPTIONS
+                ).map((opt) => {
                   const isSelected = estadoFilter === opt.value;
                   return (
                     <button
@@ -797,7 +829,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
               {estadoFilter && (
                 <span className="bg-amber-100 text-amber-950 border border-amber-300 font-bold px-2 py-0.5 rounded-md flex items-center gap-1">
                   <Filter className="w-3 h-3 text-amber-700" />
-                  Estado: {estadoFilter}
+                  {featureType === 'sinalizacao_vertical' ? 'Retrorrefletância' : 'Estado'}: {estadoFilter}
                 </span>
               )}
             </div>
@@ -1113,7 +1145,11 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
             onClick={() => setIsTurboModeOpen(true)}
             disabled={isProcessing}
             className="px-5 py-3 rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-emerald-600 hover:from-amber-600 hover:to-emerald-700 text-white font-extrabold text-xs sm:text-sm transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 active:scale-98"
-            title="Gera XLSX e PDF para todas as rodovias automaticamente com filtro PRECÁRIO e Seleção Padrão"
+            title={
+              featureType === 'sinalizacao_vertical'
+                ? 'Gera XLSX e PDF para todas as rodovias automaticamente com filtro REPROVADO e Seleção Padrão'
+                : 'Gera XLSX e PDF para todas as rodovias automaticamente com filtro PRECÁRIO e Seleção Padrão'
+            }
           >
             <Zap className="w-4 h-4 fill-amber-300 text-amber-100" />
             <span>Modo Turbo (XLSX + PDF por Rodovia)</span>

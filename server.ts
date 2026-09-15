@@ -149,7 +149,13 @@ function normalizeString(str: string): string {
 function isEstadoConservacaoCol(name: string): boolean {
   if (!name) return false;
   const n = normalizeString(name);
-  return n === 'estadoconservacao' || n === 'estadodeconservacao';
+  return (
+    n === 'estadoconservacao' ||
+    n === 'estadodeconservacao' ||
+    n === 'situacaoretrorrefletancia' ||
+    n === 'situacaoretrorefletancia' ||
+    n === 'retrorrefletancia'
+  );
 }
 
 function matchesEstadoFilter(cellValue: string, filter: string): boolean {
@@ -255,6 +261,8 @@ async function getSheetDetailsAsync(filePath: string, sheetName: string) {
         if (normE === 'bom') estadoCounts['BOM'] = (estadoCounts['BOM'] || 0) + 1;
         else if (normE === 'regular') estadoCounts['REGULAR'] = (estadoCounts['REGULAR'] || 0) + 1;
         else if (normE === 'precario') estadoCounts['PRECÁRIO'] = (estadoCounts['PRECÁRIO'] || 0) + 1;
+        else if (normE === 'aprovado') estadoCounts['Aprovado'] = (estadoCounts['Aprovado'] || 0) + 1;
+        else if (normE === 'reprovado') estadoCounts['Reprovado'] = (estadoCounts['Reprovado'] || 0) + 1;
         else estadoCounts[eVal] = (estadoCounts[eVal] || 0) + 1;
       }
     }
@@ -1629,7 +1637,9 @@ app.get('/api/download-pdf/:downloadId', async (req, res) => {
     }
 
     const featureName =
-      processedInfo.featureType === 'drenagem_superficial'
+      processedInfo.featureType === 'sinalizacao_vertical'
+        ? 'Sinalização Vertical'
+        : processedInfo.featureType === 'drenagem_superficial'
         ? 'Drenagem Superficial'
         : 'Drenagem Profunda';
 
@@ -1777,7 +1787,8 @@ app.get('/api/download-pdf/:downloadId', async (req, res) => {
           filterText += ` • Rodovia: ${processedInfo.appliedRodoviaFilter}`;
         }
         if (processedInfo.appliedEstadoFilter) {
-          filterText += ` • Estado: ${processedInfo.appliedEstadoFilter}`;
+          const filterColLabel = processedInfo.featureType === 'sinalizacao_vertical' ? 'Retrorrefletância' : 'Estado';
+          filterText += ` • ${filterColLabel}: ${processedInfo.appliedEstadoFilter}`;
         }
 
         const photosCountStr = hasAnyImages ? ` • Fotos 1 a 4 incorporadas` : '';
@@ -1837,14 +1848,48 @@ app.post('/api/generate-sample', async (req, res) => {
     const { featureType = 'drenagem_profunda' } = req.body || {};
     const wb = new ExcelJS.Workbook();
 
+    const isSinalizacao = featureType === 'sinalizacao_vertical';
     const isSuperficial = featureType === 'drenagem_superficial';
-    const sheetTitle = isSuperficial ? 'Drenagem_Superficial' : 'Drenagem_Profunda';
+    const sheetTitle = isSinalizacao
+      ? 'Sinalizacao_Vertical'
+      : isSuperficial
+      ? 'Drenagem_Superficial'
+      : 'Drenagem_Profunda';
 
     // 1st sheet: feature specific headers + extra fields to test removal
     const ws1 = wb.addWorksheet(sheetTitle);
 
     let roadHeaders: string[];
-    if (isSuperficial) {
+    if (isSinalizacao) {
+      roadHeaders = [
+        'codAuto',
+        'rodovia',
+        'sentido',
+        'km',
+        'posicao',
+        'localizacao',
+        'lado',
+        'codigoTipo',
+        'materialSuporte',
+        'largura',
+        'altura',
+        'metro2',
+        'EstadoConservacao',
+        'CodTrechoAntigo',
+        'ObservacoesDescartadas',
+        'CustoEstimado',
+        'RascunhoInterno',
+        'foto1',
+        'foto2',
+        'foto3',
+        'foto4',
+        'foto5',
+        'foto6',
+        'foto7',
+        'Situação Retrorrefletancia',
+        'ObservacaoPlacaDanificada',
+      ];
+    } else if (isSuperficial) {
       roadHeaders = [
         'codAuto',
         'Elemento',
@@ -1918,9 +1963,43 @@ app.post('/api/generate-sample', async (req, res) => {
     const conservations = ['BOM', 'REGULAR', 'PRECÁRIO'];
     const sentidos = ['Norte', 'Sul', 'Leste', 'Oeste'];
     const elementos = ['Valeta de Proteção', 'Sarjeta Triangular', 'Descida d\'Água', 'Meio-Fio'];
+    const tiposPlaca = ['R-1', 'R-19', 'A-1a', 'A-14', 'I-01', 'S-03'];
+    const materiais = ['Poste de Aço Galvanizado', 'Braço Projetado', 'Colunas Duplas', 'Pórtico'];
+    const lados = ['Direito', 'Esquerdo', 'Canteiro Central', 'Aéreo'];
+    const posicoes = ['Marginal', 'Pista Principal', 'Alça de Acesso'];
+    const localizacoes = ['Acostamento', 'Bordo da Pista', 'Canteiro'];
 
     for (let i = 1; i <= 250; i++) {
-      if (isSuperficial) {
+      if (isSinalizacao) {
+        ws1.addRow([
+          2000 + i,
+          highways[i % highways.length],
+          sentidos[i % sentidos.length],
+          (i * 1.5).toFixed(1),
+          posicoes[i % posicoes.length],
+          localizacoes[i % localizacoes.length],
+          lados[i % lados.length],
+          tiposPlaca[i % tiposPlaca.length],
+          materiais[i % materiais.length],
+          '1.20 m',
+          '0.80 m',
+          '0.96 m²',
+          conservations[i % conservations.length],
+          `ANTIGO-${i}`,
+          `Anotação de descarte ${i}`,
+          (1500 + i * 25).toFixed(2),
+          `Rascunho interno nº ${i}`,
+          `IMG_${i}_01.jpg`,
+          `IMG_${i}_02.jpg`,
+          `IMG_${i}_03.jpg`,
+          `IMG_${i}_04.jpg`,
+          `IMG_${i}_05.jpg`,
+          `IMG_${i}_06.jpg`,
+          `IMG_${i}_07.jpg`,
+          i % 3 === 0 ? 'Reprovado / Troca urgente' : 'Conforme norma DNIT',
+          i % 4 === 0 ? 'Película descascada e amassada' : 'Sem avarias físicas',
+        ]);
+      } else if (isSuperficial) {
         ws1.addRow([
           1000 + i,
           elementos[i % elementos.length],

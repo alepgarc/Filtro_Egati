@@ -9,6 +9,7 @@ import {
   Database,
   Layers,
   Waves,
+  Milestone,
   Check,
 } from 'lucide-react';
 import { UploadResponse, DrainageFeatureType } from '../types';
@@ -142,7 +143,7 @@ export const UploadStep: React.FC<UploadStepProps> = ({
   const currentFeatureConfig = DRAINAGE_FEATURES[selectedFeature];
 
   return (
-    <div className="w-full max-w-4xl mx-auto space-y-6">
+    <div className="w-full max-w-5xl mx-auto space-y-6">
       {/* 1. Feature Selection Box */}
       <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
@@ -152,7 +153,7 @@ export const UploadStep: React.FC<UploadStepProps> = ({
                 1
               </span>
               <h3 className="text-base font-bold text-slate-800">
-                Selecione o Tipo de Drenagem (Feature)
+                Selecione a Feature de Processamento
               </h3>
             </div>
             <p className="text-xs text-slate-500 mt-1">
@@ -170,12 +171,13 @@ export const UploadStep: React.FC<UploadStepProps> = ({
             >
               <option value="drenagem_profunda">Drenagem Profunda</option>
               <option value="drenagem_superficial">Drenagem Superficial</option>
+              <option value="sinalizacao_vertical">Sinalização Vertical</option>
             </select>
           </div>
         </div>
 
         {/* Interactive Feature Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
           {/* Card: Drenagem Profunda */}
           <div
             id="card-feature-drenagem-profunda"
@@ -287,6 +289,66 @@ export const UploadStep: React.FC<UploadStepProps> = ({
             <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[11px]">
               <span className="text-slate-500 font-medium">23 colunas mantidas</span>
               {selectedFeature === 'drenagem_superficial' ? (
+                <span className="text-emerald-700 font-bold bg-emerald-100 px-2 py-0.5 rounded-full">
+                  Selecionada
+                </span>
+              ) : (
+                <span className="text-slate-400">Clique para selecionar</span>
+              )}
+            </div>
+          </div>
+
+          {/* Card: Sinalização Vertical */}
+          <div
+            id="card-feature-sinalizacao-vertical"
+            onClick={() => onFeatureChange('sinalizacao_vertical')}
+            className={`relative rounded-xl p-4 border-2 transition-all cursor-pointer flex flex-col justify-between text-left ${
+              selectedFeature === 'sinalizacao_vertical'
+                ? 'border-emerald-600 bg-emerald-50/40 shadow-xs'
+                : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/50'
+            }`}
+          >
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                      selectedFeature === 'sinalizacao_vertical'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    <Milestone className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-800">
+                      Sinalização Vertical
+                    </h4>
+                    <span className="text-[11px] text-slate-500">
+                      Placas / Dimensões e Suporte
+                    </span>
+                  </div>
+                </div>
+
+                <div
+                  className={`w-5 h-5 rounded-full flex items-center justify-center border transition-all ${
+                    selectedFeature === 'sinalizacao_vertical'
+                      ? 'border-emerald-600 bg-emerald-600 text-white'
+                      : 'border-slate-300 bg-white'
+                  }`}
+                >
+                  {selectedFeature === 'sinalizacao_vertical' && <Check className="w-3.5 h-3.5" />}
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed mt-2">
+                Mantém: <span className="font-semibold text-slate-800">codAuto, rodovia, sentido, km, posicao, localizacao, lado, codigoTipo, materialSuporte, largura, altura, metro2, foto1 a foto7, Situação Retrorrefletancia, ObservacaoPlacaDanificada</span>.
+              </p>
+            </div>
+
+            <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[11px]">
+              <span className="text-slate-500 font-medium">21 colunas mantidas</span>
+              {selectedFeature === 'sinalizacao_vertical' ? (
                 <span className="text-emerald-700 font-bold bg-emerald-100 px-2 py-0.5 rounded-full">
                   Selecionada
                 </span>

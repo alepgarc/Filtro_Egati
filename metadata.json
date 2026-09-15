@@ -1,6 +1,6 @@
 {
   "name": "Limpador de Planilhas Excel",
-  "description": "EPR Paraná - Padronização e filtragem de planilhas de Drenagem Profunda e Superficial com exportação em XLSX e PDF Paisagem com fotos incorporadas.",
+  "description": "EPR Paraná - Padronização e filtragem de planilhas de Drenagem Profunda, Drenagem Superficial e Sinalização Vertical com exportação em XLSX e PDF Paisagem com fotos incorporadas.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

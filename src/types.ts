@@ -1,4 +1,4 @@
-export type DrainageFeatureType = 'drenagem_profunda' | 'drenagem_superficial';
+export type DrainageFeatureType = 'drenagem_profunda' | 'drenagem_superficial' | 'sinalizacao_vertical';
 
 export interface ColumnInfo {
   index: number;

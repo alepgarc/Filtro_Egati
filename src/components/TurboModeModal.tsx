@@ -150,7 +150,11 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
     setCurrentStepText('');
     setOverallError(null);
 
-    // Calculate rodovia items with their PRECÁRIO count
+    // Calculate rodovia items with target filter count (Reprovado for Sinalização Vertical, PRECÁRIO for others)
+    const isVerticalSignal = featureType === 'sinalizacao_vertical';
+    const targetFilterValue = isVerticalSignal ? 'Reprovado' : 'PRECÁRIO';
+    const targetFilterNorm = normalizeColKey(targetFilterValue);
+
     const list: RodoviaProcessItem[] = [];
 
     if (availableRodovias.length > 0) {
@@ -162,7 +166,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
           rowFiltersData.forEach((row) => {
             if (normalizeColKey(row.r) === normalizeColKey(rod)) {
               totalCount++;
-              if (normalizeColKey(row.e) === 'precario') {
+              if (normalizeColKey(row.e) === targetFilterNorm) {
                 precaroCount++;
               }
             }
@@ -173,16 +177,16 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
           rodovia: rod,
           precaroCount,
           totalCount,
-          // Select by default if it has PRECÁRIO records, or if no rowFiltersData is available
+          // Select by default if it has target filter records, or if no rowFiltersData is available
           selected: rowFiltersData && rowFiltersData.length > 0 ? precaroCount > 0 : true,
           status: 'idle',
         });
       });
     } else {
-      // If no rodovias are identified, create a single item representing the whole sheet with PRECÁRIO filter
+      // If no rodovias are identified, create a single item representing the whole sheet with target filter
       let precaroCount = 0;
       if (rowFiltersData && rowFiltersData.length > 0) {
-        precaroCount = rowFiltersData.filter((r) => normalizeColKey(r.e) === 'precario').length;
+        precaroCount = rowFiltersData.filter((r) => normalizeColKey(r.e) === targetFilterNorm).length;
       }
       list.push({
         rodovia: 'Todas as Rodovias (Geral)',
@@ -194,7 +198,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
     }
 
     setItems(list);
-  }, [isOpen, availableRodovias, rowFiltersData, totalRows]);
+  }, [isOpen, availableRodovias, rowFiltersData, totalRows, featureType]);
 
   if (!isOpen) return null;
 
@@ -278,7 +282,8 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
             fileId,
             sheetName,
             columnIndicesToRemove,
-            estadoConservacaoFilter: 'PRECÁRIO',
+            estadoConservacaoFilter:
+              featureType === 'sinalizacao_vertical' ? 'Reprovado' : 'PRECÁRIO',
             rodoviaFilter: rodoviaFilterParam,
             featureType,
           }),
@@ -444,9 +449,15 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                   <Filter className="w-4 h-4" />
                 </div>
                 <div>
-                  <div className="font-bold text-slate-800">Estado de Conservação</div>
+                  <div className="font-bold text-slate-800">
+                    {featureType === 'sinalizacao_vertical'
+                      ? 'Situação de Retrorrefletância'
+                      : 'Estado de Conservação'}
+                  </div>
                   <div className="text-[11px] text-amber-700 font-bold">
-                    Filtro: PRECÁRIO (apenas linhas precárias)
+                    {featureType === 'sinalizacao_vertical'
+                      ? 'Filtro: REPROVADO (apenas placas reprovadas)'
+                      : 'Filtro: PRECÁRIO (apenas linhas precárias)'}
                   </div>
                 </div>
               </div>
@@ -556,11 +567,18 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                           </span>
                           {item.precaroCount > 0 ? (
                             <span className="text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 px-1.5 py-0.2 rounded-md">
-                              {item.precaroCount} {item.precaroCount === 1 ? 'registro PRECÁRIO' : 'registros PRECÁRIOS'}
+                              {item.precaroCount}{' '}
+                              {featureType === 'sinalizacao_vertical'
+                                ? item.precaroCount === 1
+                                  ? 'registro REPROVADO'
+                                  : 'registros REPROVADOS'
+                                : item.precaroCount === 1
+                                ? 'registro PRECÁRIO'
+                                : 'registros PRECÁRIOS'}
                             </span>
                           ) : (
                             <span className="text-[10px] font-medium bg-slate-100 text-slate-500 px-1.5 py-0.2 rounded-md">
-                              0 precários ({item.totalCount} total)
+                              0 {featureType === 'sinalizacao_vertical' ? 'reprovados' : 'precários'} ({item.totalCount} total)
                             </span>
                           )}
                         </div>
