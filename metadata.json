@@ -1,0 +1,6 @@
+{
+  "name": "Limpador de Planilhas Excel",
+  "description": "Aplicativo web para upload, inspeção de abas, visualização de prévia de 20 linhas, seleção e remoção eficiente de colunas em planilhas XLSX de até 100 MB.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
