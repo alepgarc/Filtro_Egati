@@ -221,7 +221,9 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
       if (featureType === 'sinalizacao_vertical') {
         return (
           norm === 'situacaoretrorrefletancia' ||
+          norm === 'situacaoderetrorrefletancia' ||
           norm === 'situacaoretrorefletancia' ||
+          norm === 'situacaoderetrorefletancia' ||
           norm === 'retrorrefletancia'
         );
       }
@@ -278,7 +280,9 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
       let matchesRodovia = true;
 
       if (estadoFilter) {
-        matchesEstado = normalizeColKey(item.e) === normalizeColKey(estadoFilter);
+        const itemNorm = normalizeColKey(item.e);
+        const filterNorm = normalizeColKey(estadoFilter);
+        matchesEstado = itemNorm === filterNorm || itemNorm.startsWith(filterNorm);
       }
 
       if (rodoviaFilter) {

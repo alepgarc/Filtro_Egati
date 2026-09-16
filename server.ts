@@ -137,7 +137,7 @@ interface ProcessedFileInfo {
 const uploadedFiles = new Map<string, UploadedFileInfo>();
 const processedFiles = new Map<string, ProcessedFileInfo>();
 
-// Helpers for EstadoConservacao and Rodovia column and filter detection
+// Helpers for EstadoConservacao / Situação Retrorrefletancia and Rodovia column and filter detection
 function normalizeString(str: string): string {
   return (str || '')
     .toLowerCase()
@@ -146,21 +146,45 @@ function normalizeString(str: string): string {
     .replace(/[^a-z0-9]/g, '');
 }
 
-function isEstadoConservacaoCol(name: string): boolean {
+function isTargetRowStatusCol(name: string, featureType?: string): boolean {
   if (!name) return false;
   const n = normalizeString(name);
+  if (featureType === 'sinalizacao_vertical') {
+    return (
+      n === 'situacaoretrorrefletancia' ||
+      n === 'situacaoderetrorrefletancia' ||
+      n === 'situacaoretrorefletancia' ||
+      n === 'situacaoderetrorefletancia' ||
+      n === 'retrorrefletancia'
+    );
+  }
+  if (featureType === 'drenagem_profunda' || featureType === 'drenagem_superficial') {
+    return n === 'estadoconservacao' || n === 'estadodeconservacao';
+  }
   return (
     n === 'estadoconservacao' ||
     n === 'estadodeconservacao' ||
     n === 'situacaoretrorrefletancia' ||
+    n === 'situacaoderetrorrefletancia' ||
     n === 'situacaoretrorefletancia' ||
+    n === 'situacaoderetrorefletancia' ||
     n === 'retrorrefletancia'
   );
 }
 
+function isEstadoConservacaoCol(name: string): boolean {
+  return isTargetRowStatusCol(name);
+}
+
 function matchesEstadoFilter(cellValue: string, filter: string): boolean {
   if (!filter || filter.toUpperCase() === 'TODOS') return true;
-  return normalizeString(cellValue) === normalizeString(filter);
+  const cellNorm = normalizeString(cellValue);
+  const filterNorm = normalizeString(filter);
+  if (cellNorm === filterNorm) return true;
+  if (filterNorm === 'aprovado' && cellNorm.startsWith('aprovado')) return true;
+  if (filterNorm === 'reprovado' && cellNorm.startsWith('reprovado')) return true;
+  if (filterNorm === 'precario' && cellNorm.startsWith('precario')) return true;
+  return false;
 }
 
 function isRodoviaCol(name: string): boolean {
@@ -175,7 +199,7 @@ function matchesRodoviaFilter(cellValue: string, filter: string): boolean {
 }
 
 // Helper to inspect a sheet in an existing ExcelJS workbook
-async function getSheetDetailsAsync(filePath: string, sheetName: string) {
+async function getSheetDetailsAsync(filePath: string, sheetName: string, featureType?: string) {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(filePath);
   const ws = wb.getWorksheet(sheetName);
@@ -213,7 +237,7 @@ async function getSheetDetailsAsync(filePath: string, sheetName: string) {
     });
   }
 
-  // Detect Rodovia and EstadoConservacao column indices (1-based)
+  // Detect Rodovia and EstadoConservacao / Situação Retrorrefletancia column indices (1-based)
   let rodoviaColIdx = -1;
   let estadoColIdx = -1;
   for (let c = 1; c <= totalCols; c++) {
@@ -221,7 +245,7 @@ async function getSheetDetailsAsync(filePath: string, sheetName: string) {
     if (isRodoviaCol(colName)) {
       rodoviaColIdx = c;
     }
-    if (isEstadoConservacaoCol(colName)) {
+    if (isTargetRowStatusCol(colName, featureType)) {
       estadoColIdx = c;
     }
   }
@@ -258,11 +282,11 @@ async function getSheetDetailsAsync(filePath: string, sheetName: string) {
 
       if (eVal) {
         const normE = normalizeString(eVal);
-        if (normE === 'bom') estadoCounts['BOM'] = (estadoCounts['BOM'] || 0) + 1;
-        else if (normE === 'regular') estadoCounts['REGULAR'] = (estadoCounts['REGULAR'] || 0) + 1;
-        else if (normE === 'precario') estadoCounts['PRECÁRIO'] = (estadoCounts['PRECÁRIO'] || 0) + 1;
-        else if (normE === 'aprovado') estadoCounts['Aprovado'] = (estadoCounts['Aprovado'] || 0) + 1;
-        else if (normE === 'reprovado') estadoCounts['Reprovado'] = (estadoCounts['Reprovado'] || 0) + 1;
+        if (normE === 'bom' || normE.startsWith('bom')) estadoCounts['BOM'] = (estadoCounts['BOM'] || 0) + 1;
+        else if (normE === 'regular' || normE.startsWith('regular')) estadoCounts['REGULAR'] = (estadoCounts['REGULAR'] || 0) + 1;
+        else if (normE === 'precario' || normE.startsWith('precario')) estadoCounts['PRECÁRIO'] = (estadoCounts['PRECÁRIO'] || 0) + 1;
+        else if (normE === 'aprovado' || normE.startsWith('aprovado')) estadoCounts['Aprovado'] = (estadoCounts['Aprovado'] || 0) + 1;
+        else if (normE === 'reprovado' || normE.startsWith('reprovado')) estadoCounts['Reprovado'] = (estadoCounts['Reprovado'] || 0) + 1;
         else estadoCounts[eVal] = (estadoCounts[eVal] || 0) + 1;
       }
     }
@@ -349,8 +373,9 @@ app.post('/api/upload', (req, res) => {
         });
       }
 
+      const featureType = (req.body?.featureType as string) || 'drenagem_profunda';
       const activeSheet = sheetNames[0];
-      const sheetDetails = await getSheetDetailsAsync(filePath, activeSheet);
+      const sheetDetails = await getSheetDetailsAsync(filePath, activeSheet, featureType);
 
       uploadedFiles.set(fileId, {
         fileId,
@@ -378,10 +403,11 @@ app.post('/api/upload', (req, res) => {
   });
 });
 
-// 2. Switch Sheet preview endpoint
-app.get('/api/sheet-preview', async (req, res) => {
-  const fileId = req.query.fileId as string;
-  const sheetName = req.query.sheetName as string;
+// 2. Switch Sheet preview and details endpoints
+const handleSheetDetails = async (req: express.Request, res: express.Response) => {
+  const fileId = (req.params.fileId || req.query.fileId) as string;
+  const sheetName = (req.params.sheetName || req.query.sheetName) as string;
+  const featureType = (req.query.featureType as string) || undefined;
 
   if (!fileId || !sheetName) {
     return res.status(400).json({ error: 'Parâmetros fileId e sheetName são obrigatórios.' });
@@ -393,7 +419,7 @@ app.get('/api/sheet-preview', async (req, res) => {
   }
 
   try {
-    const sheetDetails = await getSheetDetailsAsync(fileInfo.filePath, sheetName);
+    const sheetDetails = await getSheetDetailsAsync(fileInfo.filePath, sheetName, featureType);
     res.json({
       sheetName,
       sheetDetails,
@@ -402,7 +428,10 @@ app.get('/api/sheet-preview', async (req, res) => {
     console.error('Error fetching sheet preview:', error);
     res.status(500).json({ error: 'Falha ao carregar prévia da aba: ' + error.message });
   }
-});
+};
+
+app.get('/api/sheet-preview', handleSheetDetails);
+app.get('/api/sheet-details/:fileId/:sheetName', handleSheetDetails);
 
 function getCellTextValue(cEl: any, sharedStrings: string[]): string {
   if (!cEl) return '';
@@ -430,7 +459,8 @@ async function processWorkbookWithZip(
   sheetNameTarget: string,
   columnIndicesToRemove: number[],
   estadoConservacaoFilter?: string | null,
-  rodoviaFilter?: string | null
+  rodoviaFilter?: string | null,
+  featureType?: string
 ) {
   const data = fs.readFileSync(inputPath);
   const zip = await JSZip.loadAsync(data);
@@ -568,7 +598,7 @@ async function processWorkbookWithZip(
     if (rAttr && /^[A-Z]+1$/.test(rAttr)) {
       const colLetter = rAttr.replace(/1$/, '');
       const headerVal = getCellTextValue(cEl, sharedStrings);
-      if (isEstadoConservacaoCol(headerVal)) {
+      if (isTargetRowStatusCol(headerVal, featureType)) {
         estadoConservacaoColLetter = colLetter;
       }
       if (isRodoviaCol(headerVal)) {
@@ -1161,7 +1191,8 @@ app.post('/api/process', async (req, res) => {
       sheetName,
       columnIndicesToRemove,
       estadoConservacaoFilter,
-      rodoviaFilter
+      rodoviaFilter,
+      featureType
     );
 
     let finalFileName = customFileName ? customFileName.trim() : '';
@@ -1996,7 +2027,7 @@ app.post('/api/generate-sample', async (req, res) => {
           `IMG_${i}_05.jpg`,
           `IMG_${i}_06.jpg`,
           `IMG_${i}_07.jpg`,
-          i % 3 === 0 ? 'Reprovado / Troca urgente' : 'Conforme norma DNIT',
+          i % 3 === 0 ? 'Reprovado' : 'Aprovado',
           i % 4 === 0 ? 'Película descascada e amassada' : 'Sem avarias físicas',
         ]);
       } else if (isSuperficial) {

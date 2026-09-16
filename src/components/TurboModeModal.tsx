@@ -166,7 +166,8 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
           rowFiltersData.forEach((row) => {
             if (normalizeColKey(row.r) === normalizeColKey(rod)) {
               totalCount++;
-              if (normalizeColKey(row.e) === targetFilterNorm) {
+              const itemNorm = normalizeColKey(row.e);
+              if (itemNorm === targetFilterNorm || itemNorm.startsWith(targetFilterNorm)) {
                 precaroCount++;
               }
             }
@@ -186,7 +187,10 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
       // If no rodovias are identified, create a single item representing the whole sheet with target filter
       let precaroCount = 0;
       if (rowFiltersData && rowFiltersData.length > 0) {
-        precaroCount = rowFiltersData.filter((r) => normalizeColKey(r.e) === targetFilterNorm).length;
+        precaroCount = rowFiltersData.filter((r) => {
+          const norm = normalizeColKey(r.e);
+          return norm === targetFilterNorm || norm.startsWith(targetFilterNorm);
+        }).length;
       }
       list.push({
         rodovia: 'Todas as Rodovias (Geral)',
