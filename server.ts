@@ -10,6 +10,9 @@ import { createServer as createViteServer } from 'vite';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import sharp from 'sharp';
+import * as xlsxModule from 'xlsx';
+
+const XLSX: any = (xlsxModule as any).default || xlsxModule;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -87,8 +90,10 @@ const storage = multer.diskStorage({
     cb(null, UPLOAD_DIR);
   },
   filename: (_req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, `${uniqueSuffix}-${file.originalname}`);
+    const ext = (path.extname(file.originalname) || '.xlsx').toLowerCase();
+    const cleanExt = ext === '.xls' ? '.xls' : '.xlsx';
+    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    cb(null, `upload-${uniqueSuffix}${cleanExt}`);
   },
 });
 
@@ -99,8 +104,8 @@ const upload = multer({
   },
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (ext !== '.xlsx') {
-      return cb(new Error('Formato inválido. Apenas arquivos .xlsx são permitidos.'));
+    if (ext !== '.xlsx' && ext !== '.xls') {
+      return cb(new Error('Formato inválido. Apenas arquivos .xlsx e .xls são permitidos.'));
     }
     cb(null, true);
   },
@@ -149,26 +154,88 @@ function normalizeString(str: string): string {
 function isTargetRowStatusCol(name: string, featureType?: string): boolean {
   if (!name) return false;
   const n = normalizeString(name);
+
+  // Exclude non-status columns
+  if (
+    n === 'rodovia' ||
+    n === 'rodovias' ||
+    n === 'uf' ||
+    n === 'km' ||
+    n === 'sentido' ||
+    n === 'bordo' ||
+    n === 'cor' ||
+    n === 'codauto' ||
+    n === 'elemento' ||
+    /^foto\d*$/.test(n)
+  ) {
+    return false;
+  }
+
+  // Feature-specific logic with fallback to broad status matching
+  if (
+    featureType === 'sinalizacao_horizontal_dispositivo' ||
+    featureType === 'sinalizacao_horizontal_zebrado' ||
+    featureType === 'sinalizacao_horizontal_marca_viaria'
+  ) {
+    if (
+      n === 'resultadogeral' ||
+      n === 'resultado' ||
+      n.startsWith('resultado') ||
+      n === 'status' ||
+      n === 'situacao' ||
+      n === 'situacaogeral' ||
+      n === 'estado' ||
+      n === 'estadoconservacao'
+    ) {
+      return true;
+    }
+  }
+
   if (featureType === 'sinalizacao_vertical') {
-    return (
+    if (
       n === 'situacaoretrorrefletancia' ||
       n === 'situacaoderetrorrefletancia' ||
       n === 'situacaoretrorefletancia' ||
       n === 'situacaoderetrorefletancia' ||
-      n === 'retrorrefletancia'
-    );
+      n === 'retrorrefletancia' ||
+      n.includes('retrorreflet') ||
+      n.includes('retroreflet') ||
+      n === 'situacao' ||
+      n === 'resultado'
+    ) {
+      return true;
+    }
   }
+
   if (featureType === 'drenagem_profunda' || featureType === 'drenagem_superficial') {
-    return n === 'estadoconservacao' || n === 'estadodeconservacao';
+    if (
+      n === 'estadoconservacao' ||
+      n === 'estadodeconservacao' ||
+      n.startsWith('estadoconservac') ||
+      n === 'estado' ||
+      n === 'situacao'
+    ) {
+      return true;
+    }
   }
+
+  // Universal fallback for any status column
   return (
     n === 'estadoconservacao' ||
     n === 'estadodeconservacao' ||
+    n.startsWith('estadoconservac') ||
     n === 'situacaoretrorrefletancia' ||
     n === 'situacaoderetrorrefletancia' ||
     n === 'situacaoretrorefletancia' ||
     n === 'situacaoderetrorefletancia' ||
-    n === 'retrorrefletancia'
+    n === 'retrorrefletancia' ||
+    n.includes('retrorreflet') ||
+    n.includes('retroreflet') ||
+    n === 'resultadogeral' ||
+    n === 'resultado' ||
+    n.startsWith('resultado') ||
+    n === 'status' ||
+    n === 'situacao'
   );
 }
 
@@ -180,10 +247,58 @@ function matchesEstadoFilter(cellValue: string, filter: string): boolean {
   if (!filter || filter.toUpperCase() === 'TODOS') return true;
   const cellNorm = normalizeString(cellValue);
   const filterNorm = normalizeString(filter);
+
+  if (!cellNorm) return false;
   if (cellNorm === filterNorm) return true;
-  if (filterNorm === 'aprovado' && cellNorm.startsWith('aprovado')) return true;
-  if (filterNorm === 'reprovado' && cellNorm.startsWith('reprovado')) return true;
-  if (filterNorm === 'precario' && cellNorm.startsWith('precario')) return true;
+  if (cellNorm.includes(filterNorm) || filterNorm.includes(cellNorm)) return true;
+
+  // Gender-neutral normalized matches
+  const isFilterReprovado =
+    filterNorm.startsWith('reprovad') ||
+    filterNorm === 'nok' ||
+    filterNorm.includes('ruim') ||
+    filterNorm.includes('nc') ||
+    filterNorm.includes('naoconforme') ||
+    filterNorm.includes('pessimo');
+
+  const isFilterAprovado =
+    filterNorm.startsWith('aprovad') ||
+    filterNorm === 'ok' ||
+    filterNorm.includes('bom') ||
+    filterNorm.includes('conforme');
+
+  const isFilterPrecario =
+    filterNorm.startsWith('precar') ||
+    filterNorm.includes('critico');
+
+  if (isFilterReprovado) {
+    return (
+      cellNorm.startsWith('reprovad') ||
+      cellNorm === 'nok' ||
+      cellNorm.includes('ruim') ||
+      cellNorm.includes('nc') ||
+      cellNorm.includes('naoconforme') ||
+      cellNorm.includes('pessimo')
+    );
+  }
+  if (isFilterAprovado) {
+    return (
+      cellNorm.startsWith('aprovad') ||
+      cellNorm === 'ok' ||
+      cellNorm.includes('bom') ||
+      cellNorm.includes('conforme')
+    );
+  }
+  if (isFilterPrecario) {
+    return (
+      cellNorm.startsWith('precar') ||
+      cellNorm.includes('ruim') ||
+      cellNorm.includes('pessimo') ||
+      cellNorm.startsWith('reprovad') ||
+      cellNorm.includes('critico')
+    );
+  }
+
   return false;
 }
 
@@ -198,13 +313,166 @@ function matchesRodoviaFilter(cellValue: string, filter: string): boolean {
   return normalizeString(cellValue) === normalizeString(filter);
 }
 
-// Helper to inspect a sheet in an existing ExcelJS workbook
-async function getSheetDetailsAsync(filePath: string, sheetName: string, featureType?: string) {
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(filePath);
-  const ws = wb.getWorksheet(sheetName);
+// Helper to inspect a sheet with ExcelJS and SheetJS fallback
+async function getSheetDetailsAsync(
+  filePath: string,
+  sheetName: string,
+  featureType?: string,
+  existingWb?: ExcelJS.Workbook
+) {
+  try {
+    const wb = existingWb || new ExcelJS.Workbook();
+    if (!existingWb) {
+      await wb.xlsx.readFile(filePath);
+    }
+    const ws = wb.getWorksheet(sheetName);
 
-  if (!ws) {
+    if (ws) {
+      const totalRows = Math.max(0, ws.rowCount - 1);
+      const totalCols = ws.columnCount;
+
+      const columns: { index: number; name: string; letter: string }[] = [];
+      const headers: string[] = [];
+
+      const headerRow = ws.getRow(1);
+      for (let c = 1; c <= totalCols; c++) {
+        const cell = headerRow.getCell(c);
+        const letter = ws.getColumn(c).letter || String(c);
+        let name = (cell.text || (cell.value != null ? String(cell.value) : '')).trim();
+        if (!name) {
+          name = `Coluna ${letter}`;
+        }
+        headers.push(name);
+        columns.push({
+          index: c - 1, // 0-based index for UI array indexing
+          name,
+          letter,
+        });
+      }
+
+      // Detect Rodovia and EstadoConservacao / Situação Retrorrefletancia column indices (1-based)
+      let rodoviaColIdx = -1;
+      let estadoColIdx = -1;
+      for (let c = 1; c <= totalCols; c++) {
+        const colName = headers[c - 1];
+        if (isRodoviaCol(colName)) {
+          rodoviaColIdx = c;
+        }
+        if (isTargetRowStatusCol(colName, featureType)) {
+          estadoColIdx = c;
+        }
+      }
+
+      const rowFiltersData: { r: string; e: string }[] = [];
+      const rodoviaCounts: Record<string, number> = {};
+      const estadoCounts: Record<string, number> = {};
+      const uniqueRodovias = new Set<string>();
+
+      ws.eachRow((row, rowNumber) => {
+        if (rowNumber > 1) {
+          let rVal = '';
+          if (rodoviaColIdx > 0) {
+            const cell = row.getCell(rodoviaColIdx);
+            if (cell.value !== null && cell.value !== undefined) {
+              rVal = String(cell.text || cell.value).trim();
+            }
+          }
+
+          let eVal = '';
+          if (estadoColIdx > 0) {
+            const cell = row.getCell(estadoColIdx);
+            if (cell.value !== null && cell.value !== undefined) {
+              eVal = String(cell.text || cell.value).trim();
+            }
+          }
+
+          rowFiltersData.push({ r: rVal, e: eVal });
+
+          if (rVal) {
+            uniqueRodovias.add(rVal);
+            rodoviaCounts[rVal] = (rodoviaCounts[rVal] || 0) + 1;
+          }
+
+          if (eVal) {
+            const normE = normalizeString(eVal);
+            let matchedKey = '';
+
+            if (normE === 'bom' || normE.startsWith('bom')) {
+              matchedKey = 'BOM';
+            } else if (normE === 'regular' || normE.startsWith('regular')) {
+              matchedKey = 'REGULAR';
+            } else if (normE === 'precario' || normE.startsWith('precario')) {
+              matchedKey = 'PRECÁRIO';
+            } else if (normE === 'aprovado' || normE.startsWith('aprovado') || normE === 'ok') {
+              matchedKey = 'Aprovado';
+            } else if (normE === 'reprovado' || normE.startsWith('reprovado') || normE === 'nok') {
+              matchedKey = 'Reprovado';
+            } else {
+              // Case-insensitive lookup in existing keys to group duplicates
+              const existingKeys = Object.keys(estadoCounts);
+              const foundKey = existingKeys.find((k) => k.toLowerCase() === eVal.toLowerCase());
+              matchedKey = foundKey || eVal;
+            }
+
+            estadoCounts[matchedKey] = (estadoCounts[matchedKey] || 0) + 1;
+          }
+        }
+      });
+
+      const rodoviaOptions = Array.from(uniqueRodovias).sort((a, b) =>
+        a.localeCompare(b, 'pt-BR', { numeric: true, sensitivity: 'base' })
+      );
+
+      // Read up to 20 preview rows (rows 2 to min(ws.rowCount, 21))
+      const previewRows: (string | number | boolean | null)[][] = [];
+      const maxPreviewR = Math.min(ws.rowCount, 21);
+
+      for (let r = 2; r <= maxPreviewR; r++) {
+        const rowObj = ws.getRow(r);
+        const rowValues: (string | number | boolean | null)[] = [];
+        for (let c = 1; c <= totalCols; c++) {
+          const cell = rowObj.getCell(c);
+          let cellStr = '';
+          if (cell.value !== null && cell.value !== undefined) {
+            if (cell.value instanceof Date) {
+              cellStr = cell.value.toLocaleDateString('pt-BR');
+            } else if (typeof cell.value === 'object') {
+              if ('result' in cell.value) {
+                cellStr = String((cell.value as any).result ?? '');
+              } else if ('richText' in cell.value && Array.isArray((cell.value as any).richText)) {
+                cellStr = (cell.value as any).richText.map((t: any) => t.text).join('');
+              } else {
+                cellStr = cell.text || '';
+              }
+            } else {
+              cellStr = String(cell.value);
+            }
+          }
+          rowValues.push(cellStr);
+        }
+        previewRows.push(rowValues);
+      }
+
+      return {
+        headers,
+        columns,
+        totalRows: rowFiltersData.length,
+        totalCols,
+        previewRows,
+        rodoviaOptions,
+        rowFiltersData,
+        rodoviaCounts,
+        estadoCounts,
+      };
+    }
+  } catch (err) {
+    console.warn('ExcelJS sheet reading encountered an issue, falling back to SheetJS:', err);
+  }
+
+  // Fallback using SheetJS (XLSX)
+  const workbook = XLSX.readFile(filePath, { cellDates: true });
+  const sheet = workbook.Sheets[sheetName] || workbook.Sheets[workbook.SheetNames[0]];
+  if (!sheet) {
     return {
       headers: [],
       columns: [],
@@ -212,125 +480,84 @@ async function getSheetDetailsAsync(filePath: string, sheetName: string, feature
       totalCols: 0,
       previewRows: [],
       rodoviaOptions: [],
+      rowFiltersData: [],
+      rodoviaCounts: {},
+      estadoCounts: {},
     };
   }
 
-  const totalRows = Math.max(0, ws.rowCount - 1);
-  const totalCols = ws.columnCount;
+  const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  const headerRow: string[] = (rawRows[0] || []).map((h, i) => String(h || `Coluna ${idxToCol(i)}`).trim());
+  const columns = headerRow.map((name, index) => ({
+    index,
+    name,
+    letter: idxToCol(index),
+  }));
 
-  const columns: { index: number; name: string; letter: string }[] = [];
-  const headers: string[] = [];
-
-  const headerRow = ws.getRow(1);
-  for (let c = 1; c <= totalCols; c++) {
-    const cell = headerRow.getCell(c);
-    const letter = ws.getColumn(c).letter || String(c);
-    let name = (cell.text || (cell.value != null ? String(cell.value) : '')).trim();
-    if (!name) {
-      name = `Coluna ${letter}`;
-    }
-    headers.push(name);
-    columns.push({
-      index: c - 1, // 0-based index for UI array indexing
-      name,
-      letter,
-    });
-  }
-
-  // Detect Rodovia and EstadoConservacao / Situação Retrorrefletancia column indices (1-based)
   let rodoviaColIdx = -1;
   let estadoColIdx = -1;
-  for (let c = 1; c <= totalCols; c++) {
-    const colName = headers[c - 1];
-    if (isRodoviaCol(colName)) {
-      rodoviaColIdx = c;
-    }
-    if (isTargetRowStatusCol(colName, featureType)) {
-      estadoColIdx = c;
-    }
-  }
+  headerRow.forEach((h, idx) => {
+    if (isRodoviaCol(h)) rodoviaColIdx = idx;
+    if (isTargetRowStatusCol(h, featureType)) estadoColIdx = idx;
+  });
 
   const rowFiltersData: { r: string; e: string }[] = [];
   const rodoviaCounts: Record<string, number> = {};
   const estadoCounts: Record<string, number> = {};
   const uniqueRodovias = new Set<string>();
 
-  ws.eachRow((row, rowNumber) => {
-    if (rowNumber > 1) {
-      let rVal = '';
-      if (rodoviaColIdx > 0) {
-        const cell = row.getCell(rodoviaColIdx);
-        if (cell.value !== null && cell.value !== undefined) {
-          rVal = String(cell.text || cell.value).trim();
-        }
-      }
+  for (let r = 1; r < rawRows.length; r++) {
+    const row = rawRows[r];
+    const rVal = rodoviaColIdx >= 0 && row[rodoviaColIdx] ? String(row[rodoviaColIdx]).trim() : '';
+    const eVal = estadoColIdx >= 0 && row[estadoColIdx] ? String(row[estadoColIdx]).trim() : '';
 
-      let eVal = '';
-      if (estadoColIdx > 0) {
-        const cell = row.getCell(estadoColIdx);
-        if (cell.value !== null && cell.value !== undefined) {
-          eVal = String(cell.text || cell.value).trim();
-        }
-      }
-
-      rowFiltersData.push({ r: rVal, e: eVal });
-
-      if (rVal) {
-        uniqueRodovias.add(rVal);
-        rodoviaCounts[rVal] = (rodoviaCounts[rVal] || 0) + 1;
-      }
-
-      if (eVal) {
-        const normE = normalizeString(eVal);
-        if (normE === 'bom' || normE.startsWith('bom')) estadoCounts['BOM'] = (estadoCounts['BOM'] || 0) + 1;
-        else if (normE === 'regular' || normE.startsWith('regular')) estadoCounts['REGULAR'] = (estadoCounts['REGULAR'] || 0) + 1;
-        else if (normE === 'precario' || normE.startsWith('precario')) estadoCounts['PRECÁRIO'] = (estadoCounts['PRECÁRIO'] || 0) + 1;
-        else if (normE === 'aprovado' || normE.startsWith('aprovado')) estadoCounts['Aprovado'] = (estadoCounts['Aprovado'] || 0) + 1;
-        else if (normE === 'reprovado' || normE.startsWith('reprovado')) estadoCounts['Reprovado'] = (estadoCounts['Reprovado'] || 0) + 1;
-        else estadoCounts[eVal] = (estadoCounts[eVal] || 0) + 1;
-      }
+    rowFiltersData.push({ r: rVal, e: eVal });
+    if (rVal) {
+      uniqueRodovias.add(rVal);
+      rodoviaCounts[rVal] = (rodoviaCounts[rVal] || 0) + 1;
     }
-  });
+    if (eVal) {
+      const normE = normalizeString(eVal);
+      let matchedKey = '';
+
+      if (normE === 'bom' || normE.startsWith('bom')) {
+        matchedKey = 'BOM';
+      } else if (normE === 'regular' || normE.startsWith('regular')) {
+        matchedKey = 'REGULAR';
+      } else if (normE === 'precario' || normE.startsWith('precario')) {
+        matchedKey = 'PRECÁRIO';
+      } else if (normE === 'aprovado' || normE.startsWith('aprovado') || normE === 'ok') {
+        matchedKey = 'Aprovado';
+      } else if (normE === 'reprovado' || normE.startsWith('reprovado') || normE === 'nok') {
+        matchedKey = 'Reprovado';
+      } else {
+        // Case-insensitive lookup in existing keys to group duplicates
+        const existingKeys = Object.keys(estadoCounts);
+        const foundKey = existingKeys.find((k) => k.toLowerCase() === eVal.toLowerCase());
+        matchedKey = foundKey || eVal;
+      }
+
+      estadoCounts[matchedKey] = (estadoCounts[matchedKey] || 0) + 1;
+    }
+  }
 
   const rodoviaOptions = Array.from(uniqueRodovias).sort((a, b) =>
     a.localeCompare(b, 'pt-BR', { numeric: true, sensitivity: 'base' })
   );
 
-  // Read up to 20 preview rows (rows 2 to min(ws.rowCount, 21))
-  const previewRows: (string | number | boolean | null)[][] = [];
-  const maxPreviewR = Math.min(ws.rowCount, 21);
-
-  for (let r = 2; r <= maxPreviewR; r++) {
-    const rowObj = ws.getRow(r);
-    const rowValues: (string | number | boolean | null)[] = [];
-    for (let c = 1; c <= totalCols; c++) {
-      const cell = rowObj.getCell(c);
-      let cellStr = '';
-      if (cell.value !== null && cell.value !== undefined) {
-        if (cell.value instanceof Date) {
-          cellStr = cell.value.toLocaleDateString('pt-BR');
-        } else if (typeof cell.value === 'object') {
-          if ('result' in cell.value) {
-            cellStr = String((cell.value as any).result ?? '');
-          } else if ('richText' in cell.value && Array.isArray((cell.value as any).richText)) {
-            cellStr = (cell.value as any).richText.map((t: any) => t.text).join('');
-          } else {
-            cellStr = cell.text || '';
-          }
-        } else {
-          cellStr = String(cell.value);
-        }
-      }
-      rowValues.push(cellStr);
-    }
-    previewRows.push(rowValues);
-  }
+  const previewRows = rawRows.slice(1, 21).map((row) =>
+    headerRow.map((_, colI) => {
+      const v = row[colI];
+      if (v instanceof Date) return v.toLocaleDateString('pt-BR');
+      return v !== undefined && v !== null ? String(v) : '';
+    })
+  );
 
   return {
-    headers,
+    headers: headerRow,
     columns,
     totalRows: rowFiltersData.length,
-    totalCols,
+    totalCols: headerRow.length,
     previewRows,
     rodoviaOptions,
     rowFiltersData,
@@ -360,13 +587,41 @@ app.post('/api/upload', (req, res) => {
     }
 
     try {
-      const filePath = req.file.path;
+      let filePath = req.file.path;
+      const originalExt = path.extname(req.file.originalname).toLowerCase();
+      let originalName = req.file.originalname;
+      try {
+        originalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+      } catch {
+        originalName = req.file.originalname;
+      }
+
+      // If user uploaded a legacy .xls file, convert it to standard .xlsx using ExcelJS & image extraction
+      if (originalExt === '.xls' || !filePath.toLowerCase().endsWith('.xlsx')) {
+        const xlsxConvertedPath = path.join(
+          UPLOAD_DIR,
+          `${path.basename(filePath, path.extname(filePath))}-converted.xlsx`
+        );
+        await convertXlsToXlsxWithImages(filePath, xlsxConvertedPath);
+        filePath = xlsxConvertedPath;
+      }
+
       const fileId = path.basename(filePath);
 
-      const wb = new ExcelJS.Workbook();
-      await wb.xlsx.readFile(filePath);
+      let sheetNames: string[] = [];
+      let wb: ExcelJS.Workbook | undefined;
 
-      const sheetNames = wb.worksheets.map((w) => w.name);
+      try {
+        wb = new ExcelJS.Workbook();
+        await wb.xlsx.readFile(filePath);
+        sheetNames = wb.worksheets.map((w) => w.name);
+      } catch (wbErr) {
+        console.warn('ExcelJS could not read sheets, falling back to XLSX:', wbErr);
+        const xlsxBook = XLSX.readFile(filePath);
+        sheetNames = xlsxBook.SheetNames;
+        wb = undefined;
+      }
+
       if (!sheetNames || sheetNames.length === 0) {
         return res.status(400).json({
           error: 'A planilha enviada não possui nenhuma aba válida.',
@@ -375,27 +630,30 @@ app.post('/api/upload', (req, res) => {
 
       const featureType = (req.body?.featureType as string) || 'drenagem_profunda';
       const activeSheet = sheetNames[0];
-      const sheetDetails = await getSheetDetailsAsync(filePath, activeSheet, featureType);
+      const sheetDetails = await getSheetDetailsAsync(filePath, activeSheet, featureType, wb);
 
       uploadedFiles.set(fileId, {
         fileId,
-        originalName: req.file.originalname,
+        originalName,
         filePath,
         fileSize: req.file.size,
         uploadedAt: Date.now(),
         sheetNames,
       });
 
-      res.json({
+      res.setHeader('Content-Type', 'application/json');
+      return res.json({
         fileId,
-        originalName: req.file.originalname,
+        originalName,
         fileSize: req.file.size,
         sheetNames,
         activeSheet,
         sheetDetails,
+        featureType,
       });
     } catch (parseError: any) {
-      console.error('Error parsing uploaded XLSX:', parseError);
+      console.error('Error parsing uploaded file:', parseError);
+      res.setHeader('Content-Type', 'application/json');
       return res.status(500).json({
         error: 'Erro ao processar planilha Excel: ' + (parseError.message || 'Arquivo corrompido ou formato não suportado.'),
       });
@@ -589,9 +847,10 @@ async function processWorkbookWithZip(
     return 0;
   }
 
-  // 4. Identify EstadoConservacao and Rodovia columns in header (Row 1)
+  // 4. Identify EstadoConservacao, Rodovia, and Km columns in header (Row 1)
   let estadoConservacaoColLetter: string | null = null;
   let rodoviaColLetter: string | null = null;
+  let kmColLetter: string | null = null;
   for (let i = 0; i < cNodes.length; i++) {
     const cEl = cNodes.item(i);
     const rAttr = cEl?.getAttribute('r');
@@ -603,6 +862,9 @@ async function processWorkbookWithZip(
       }
       if (isRodoviaCol(headerVal)) {
         rodoviaColLetter = colLetter;
+      }
+      if (String(headerVal || '').toLowerCase().trim() === 'km') {
+        kmColLetter = colLetter;
       }
     }
   }
@@ -624,17 +886,31 @@ async function processWorkbookWithZip(
       rodoviaColLetter !== null
   );
 
-  const hasAnyRowFilter = isEstadoFilterActive || isRodoviaFilterActive;
+  function parseKmValue(val: string): number {
+    if (!val) return 99999999;
+    const clean = val.replace(/km/i, '').trim();
+    if (clean.includes('+')) {
+      const parts = clean.split('+');
+      const km = parseFloat(parts[0].replace(',', '.')) || 0;
+      const m = parseFloat(parts[1].replace(',', '.')) || 0;
+      return km + m / 1000;
+    }
+    const parsed = parseFloat(clean.replace(',', '.'));
+    return isNaN(parsed) ? 99999999 : parsed;
+  }
 
-  // 5. Build newRowMap and identify rows to remove
-  const newRowMap = new Map<number, number>();
-  newRowMap.set(1, 1); // Row 1 (header) is always kept as row 1
-
+  // 5. Build list of matching rows, retrieve KM for sorting, and identify rows to remove
   const rowsToRemove: any[] = [];
   const rowNodes = sheetDom.getElementsByTagName('row');
-  let nextNewRow = 2;
   let originalDataRowsCount = 0;
   let keptDataRowsCount = 0;
+
+  interface KeptRowItem {
+    rowEl: any;
+    origR: number;
+    kmVal: number;
+  }
+  const keptRowsList: KeptRowItem[] = [];
 
   for (let i = 0; i < rowNodes.length; i++) {
     const rowEl = rowNodes.item(i);
@@ -645,49 +921,66 @@ async function processWorkbookWithZip(
 
     originalDataRowsCount++;
 
-    if (!hasAnyRowFilter) {
-      // No filter: keep every row as-is
-      newRowMap.set(rNum, rNum);
+    let matchesEstado = true;
+    let matchesRodovia = true;
+    const cChildren = rowEl.getElementsByTagName('c');
+
+    if (isEstadoFilterActive) {
+      let cellVal = '';
+      const targetCellRef = `${estadoConservacaoColLetter}${rNum}`;
+      for (let j = 0; j < cChildren.length; j++) {
+        const c = cChildren.item(j);
+        if (c?.getAttribute('r') === targetCellRef) {
+          cellVal = getCellTextValue(c, sharedStrings);
+          break;
+        }
+      }
+      matchesEstado = matchesEstadoFilter(cellVal, estadoConservacaoFilter!);
+    }
+
+    if (isRodoviaFilterActive) {
+      let cellVal = '';
+      const targetCellRef = `${rodoviaColLetter}${rNum}`;
+      for (let j = 0; j < cChildren.length; j++) {
+        const c = cChildren.item(j);
+        if (c?.getAttribute('r') === targetCellRef) {
+          cellVal = getCellTextValue(c, sharedStrings);
+          break;
+        }
+      }
+      matchesRodovia = matchesRodoviaFilter(cellVal, rodoviaFilter!);
+    }
+
+    if (matchesEstado && matchesRodovia) {
+      let kmStr = '';
+      if (kmColLetter) {
+        const kmCellRef = `${kmColLetter}${rNum}`;
+        for (let j = 0; j < cChildren.length; j++) {
+          const c = cChildren.item(j);
+          if (c?.getAttribute('r') === kmCellRef) {
+            kmStr = getCellTextValue(c, sharedStrings);
+            break;
+          }
+        }
+      }
+      const kmVal = parseKmValue(kmStr);
+      keptRowsList.push({ rowEl, origR: rNum, kmVal });
       keptDataRowsCount++;
     } else {
-      let matchesEstado = true;
-      let matchesRodovia = true;
-      const cChildren = rowEl.getElementsByTagName('c');
-
-      if (isEstadoFilterActive) {
-        let cellVal = '';
-        const targetCellRef = `${estadoConservacaoColLetter}${rNum}`;
-        for (let j = 0; j < cChildren.length; j++) {
-          const c = cChildren.item(j);
-          if (c?.getAttribute('r') === targetCellRef) {
-            cellVal = getCellTextValue(c, sharedStrings);
-            break;
-          }
-        }
-        matchesEstado = matchesEstadoFilter(cellVal, estadoConservacaoFilter!);
-      }
-
-      if (isRodoviaFilterActive) {
-        let cellVal = '';
-        const targetCellRef = `${rodoviaColLetter}${rNum}`;
-        for (let j = 0; j < cChildren.length; j++) {
-          const c = cChildren.item(j);
-          if (c?.getAttribute('r') === targetCellRef) {
-            cellVal = getCellTextValue(c, sharedStrings);
-            break;
-          }
-        }
-        matchesRodovia = matchesRodoviaFilter(cellVal, rodoviaFilter!);
-      }
-
-      if (matchesEstado && matchesRodovia) {
-        newRowMap.set(rNum, nextNewRow);
-        nextNewRow++;
-        keptDataRowsCount++;
-      } else {
-        rowsToRemove.push(rowEl);
-      }
+      rowsToRemove.push(rowEl);
     }
+  }
+
+  // Sort kept rows numerically by KM
+  keptRowsList.sort((a, b) => a.kmVal - b.kmVal);
+
+  const newRowMap = new Map<number, number>();
+  newRowMap.set(1, 1); // Row 1 is always kept as row 1
+
+  let nextNewRow = 2;
+  for (const item of keptRowsList) {
+    newRowMap.set(item.origR, nextNewRow);
+    nextNewRow++;
   }
 
   // Remove rows from sheet DOM that did not match the filter
@@ -709,6 +1002,20 @@ async function processWorkbookWithZip(
         rowEl.setAttribute('spans', `1:${keepIndices.size}`);
       }
     }
+  }
+
+  // Physically sort <row> elements inside <sheetData> in ascending order of their new row number
+  const sheetData = sheetDom.getElementsByTagName('sheetData').item(0);
+  if (sheetData) {
+    const rows = Array.from(sheetData.getElementsByTagName('row'));
+    rows.sort((a, b) => {
+      const rA = parseInt(a.getAttribute('r') || '0', 10);
+      const rB = parseInt(b.getAttribute('r') || '0', 10);
+      return rA - rB;
+    });
+    rows.forEach((r) => {
+      sheetData.appendChild(r);
+    });
   }
 
   // 6. Update or remove cell elements <c>
@@ -740,7 +1047,7 @@ async function processWorkbookWithZip(
     }
   });
 
-  const finalMaxRow = hasAnyRowFilter ? nextNewRow - 1 : maxRow;
+  const finalMaxRow = nextNewRow - 1;
 
   // 7. Update <dimension ref="..." />
   const dimNodes = sheetDom.getElementsByTagName('dimension');
@@ -896,9 +1203,13 @@ async function processWorkbookWithZip(
   // Save modified sheet XML back to zip
   zip.file(sheetPath, serializer.serializeToString(sheetDom));
 
-  // 12. Update Drawing XML files (xl/drawings/drawing*.xml)
+  // 12. Update Drawing XML files (xl/drawings/drawing*.xml) and relationship files (xl/drawings/_rels/drawing*.xml.rels)
   for (const filename of Object.keys(zip.files)) {
-    if (filename.startsWith('xl/drawings/drawing') && filename.endsWith('.xml')) {
+    if (
+      filename.startsWith('xl/drawings/drawing') &&
+      filename.endsWith('.xml') &&
+      !filename.includes('/_rels/')
+    ) {
       const dXmlStr = await zip.files[filename].async('string');
       const dDom = parser.parseFromString(dXmlStr, 'text/xml');
 
@@ -937,8 +1248,7 @@ async function processWorkbookWithZip(
               (anchor as any).getElementsByTagName('xdr:to').item(0) ||
               (anchor as any).getElementsByTagName('to').item(0);
             if (toEl) {
-              const toRowEl =
-                toRowElTag(toEl);
+              const toRowEl = toRowElTag(toEl);
               if (toRowEl) {
                 const toOrigRow0 = parseInt(toRowEl.textContent || '0', 10);
                 const rowDiff = toOrigRow0 - origRow0;
@@ -949,7 +1259,14 @@ async function processWorkbookWithZip(
 
           if (colEl) {
             const oldC = parseInt(colEl.textContent || '0', 10);
-            colEl.textContent = String(mapCol(oldC));
+            if (!keepIndices.has(oldC)) {
+              // Column was removed! Remove this drawing anchor
+              anchorsToRemove.push(anchor);
+              continue;
+            }
+
+            const newC = newColIdxMap.get(oldC)!;
+            colEl.textContent = String(newC);
 
             const toEl =
               (anchor as any).getElementsByTagName('xdr:to').item(0) ||
@@ -960,7 +1277,8 @@ async function processWorkbookWithZip(
                 toEl.getElementsByTagName('col').item(0);
               if (toColEl) {
                 const toOldC = parseInt(toColEl.textContent || '0', 10);
-                toColEl.textContent = String(mapCol(toOldC));
+                const colDiff = toOldC - oldC;
+                toColEl.textContent = String(newC + colDiff);
               }
             }
           }
@@ -971,7 +1289,146 @@ async function processWorkbookWithZip(
         if (a && a.parentNode) a.parentNode.removeChild(a);
       });
 
-      zip.file(filename, serializer.serializeToString(dDom));
+      // Collect all remaining r:embed or link IDs in this drawing XML namespace-agnostically
+      const usedRids = new Set<string>();
+      const allDrawingTags = dDom.getElementsByTagName('*');
+      for (let i = 0; i < allDrawingTags.length; i++) {
+        const b = allDrawingTags.item(i);
+        if (b && (b.localName === 'blip' || b.nodeName.endsWith(':blip') || b.nodeName === 'blip')) {
+          let rid = b.getAttribute('r:embed') || b.getAttribute('embed') || b.getAttribute('r:link') || b.getAttribute('link') || '';
+          if (!rid && b.attributes) {
+            for (let j = 0; j < b.attributes.length; j++) {
+              const attr = b.attributes.item(j);
+              if (attr && (attr.name === 'r:embed' || attr.name === 'embed' || attr.localName === 'embed' || attr.name === 'r:link' || attr.name === 'link' || attr.localName === 'link' || attr.name.endsWith(':embed'))) {
+                rid = attr.value;
+                break;
+              }
+            }
+          }
+          if (rid) {
+            usedRids.add(rid);
+          }
+        }
+      }
+
+      const remainingAnchorsCount = Array.from(dDom.documentElement.childNodes).filter(
+        (n: any) => n.nodeType === 1
+      ).length;
+
+      if (remainingAnchorsCount === 0) {
+        // If 0 anchors remain, remove drawing element from sheet XML and remove relationship from sheet.xml.rels
+        const drawingNodes: any[] = [];
+        const allSheetTags = sheetDom.getElementsByTagName('*');
+        for (let i = 0; i < allSheetTags.length; i++) {
+          const node = allSheetTags.item(i);
+          if (node && (node.localName === 'drawing' || node.nodeName.endsWith(':drawing') || node.nodeName === 'drawing')) {
+            drawingNodes.push(node);
+          }
+        }
+
+        const drawingsToRemove: any[] = [];
+        let drawingRelIdToRemove: string | null = null;
+
+        for (let i = 0; i < drawingNodes.length; i++) {
+          const dn = drawingNodes[i];
+          if (dn) {
+            let rid = dn.getAttribute('r:id') || dn.getAttribute('id') || '';
+            if (!rid && dn.attributes) {
+              for (let j = 0; j < dn.attributes.length; j++) {
+                const attr = dn.attributes.item(j);
+                if (attr && (attr.name === 'r:id' || attr.name === 'id' || attr.localName === 'id' || attr.name.endsWith(':id'))) {
+                  rid = attr.value;
+                  break;
+                }
+              }
+            }
+            if (rid) {
+              drawingRelIdToRemove = rid;
+            }
+            drawingsToRemove.push(dn);
+          }
+        }
+        drawingsToRemove.forEach((d) => {
+          if (d && d.parentNode) d.parentNode.removeChild(d);
+        });
+
+        // Re-serialize sheetDom
+        zip.file(sheetPath, serializer.serializeToString(sheetDom));
+
+        // Remove from sheet.xml.rels
+        const sheetRelsPath = sheetPath
+          .replace('worksheets/', 'worksheets/_rels/')
+          .replace('.xml', '.xml.rels');
+        if (zip.files[sheetRelsPath] && drawingRelIdToRemove) {
+          const sRelsStr = await zip.files[sheetRelsPath].async('string');
+          const sRelsDom = parser.parseFromString(sRelsStr, 'text/xml');
+          const rels = sRelsDom.getElementsByTagName('Relationship');
+          const relsToDel: any[] = [];
+          for (let i = 0; i < rels.length; i++) {
+            const r = rels.item(i);
+            if (r?.getAttribute('Id') === drawingRelIdToRemove) {
+              relsToDel.push(r);
+            }
+          }
+          relsToDel.forEach((r) => {
+            if (r && r.parentNode) r.parentNode.removeChild(r);
+          });
+          zip.file(sheetRelsPath, serializer.serializeToString(sRelsDom));
+        }
+
+        // Cleanly remove drawing XML file and its rels file from zip
+        zip.remove(filename);
+        const dBase = path.basename(filename);
+        const relsFilename = `xl/drawings/_rels/${dBase}.rels`;
+        if (zip.files[relsFilename]) {
+          zip.remove(relsFilename);
+        }
+
+        // Remove override from [Content_Types].xml
+        if (zip.files['[Content_Types].xml']) {
+          const ctStr = await zip.files['[Content_Types].xml'].async('string');
+          const ctDom = parser.parseFromString(ctStr, 'text/xml');
+          const overrides = ctDom.getElementsByTagName('Override');
+          const ovToRemove: any[] = [];
+          for (let i = 0; i < overrides.length; i++) {
+            const ov = overrides.item(i);
+            const pn = ov?.getAttribute('PartName') || '';
+            if (pn === `/${filename}` || pn === filename) {
+              ovToRemove.push(ov);
+            }
+          }
+          ovToRemove.forEach((ov) => {
+            if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+          });
+          zip.file('[Content_Types].xml', serializer.serializeToString(ctDom));
+        }
+      } else {
+        zip.file(filename, serializer.serializeToString(dDom));
+
+        // Clean up corresponding drawing rels file
+        const dBase = path.basename(filename);
+        const relsFilename = `xl/drawings/_rels/${dBase}.rels`;
+        if (zip.files[relsFilename]) {
+          const relsStr = await zip.files[relsFilename].async('string');
+          const relsDom = parser.parseFromString(relsStr, 'text/xml');
+          const relNodes = relsDom.getElementsByTagName('Relationship');
+          const relsToRemove: any[] = [];
+
+          for (let i = 0; i < relNodes.length; i++) {
+            const rEl = relNodes.item(i);
+            const id = rEl?.getAttribute('Id');
+            if (id && !usedRids.has(id)) {
+              relsToRemove.push(rEl);
+            }
+          }
+
+          relsToRemove.forEach((r) => {
+            if (r && r.parentNode) r.parentNode.removeChild(r);
+          });
+
+          zip.file(relsFilename, serializer.serializeToString(relsDom));
+        }
+      }
     }
   }
 
@@ -985,8 +1442,11 @@ async function processWorkbookWithZip(
       if (tableEls.length > 0) {
         const tEl = tableEls.item(0);
         if (tEl) {
+          const origRef = tEl.getAttribute('ref') || 'A1:A1';
+          const rangeParts = origRef.split(':');
+          const startCell = rangeParts[0] || 'A1';
           const lastColStr = idxToCol(keepIndices.size - 1);
-          tEl.setAttribute('ref', `A1:${lastColStr}${finalMaxRow}`);
+          tEl.setAttribute('ref', `${startCell}:${lastColStr}${finalMaxRow}`);
         }
       }
 
@@ -1311,6 +1771,466 @@ function cleanImageKey(key: string): string {
     .replace(/[._\-+]/g, '');
 }
 
+interface ExtractedRawImage {
+  buffer: Buffer;
+  format: 'JPEG' | 'PNG';
+  width: number;
+  height: number;
+  nameKey?: string;
+}
+
+function getWorkbookStream(buf: Buffer): Buffer {
+  if (buf.length < 512) return buf;
+  if (buf.readUInt32LE(0) !== 0xE011CFD0 || buf.readUInt32LE(4) !== 0xE11AB1A1) return buf;
+
+  const sectorSize = 1 << buf.readUInt16LE(30);
+  const miniSectorSize = 1 << buf.readUInt16LE(32);
+  const dirStartSector = buf.readUInt32LE(48);
+  const miniFatStartSec = buf.readUInt32LE(60);
+  const minSizeStandardStream = buf.readUInt32LE(56);
+
+  const difatSectors: number[] = [];
+  for (let i = 0; i < 109; i++) {
+    const s = buf.readUInt32LE(76 + i * 4);
+    if (s < 0xFFFFFFFC) difatSectors.push(s);
+  }
+
+  const fat: number[] = [];
+  for (const fSec of difatSectors) {
+    const offset = (fSec + 1) * sectorSize;
+    if (offset + sectorSize > buf.length) break;
+    for (let i = 0; i < sectorSize; i += 4) {
+      fat.push(buf.readUInt32LE(offset + i));
+    }
+  }
+
+  let dirBuf = Buffer.alloc(0);
+  let sec = dirStartSector;
+  const visitedDir = new Set();
+  while (sec < 0xFFFFFFFC && !visitedDir.has(sec)) {
+    visitedDir.add(sec);
+    const offset = (sec + 1) * sectorSize;
+    if (offset + sectorSize > buf.length) break;
+    dirBuf = Buffer.concat([dirBuf, buf.subarray(offset, offset + sectorSize)]);
+    sec = fat[sec] !== undefined ? fat[sec] : 0xFFFFFFFF;
+  }
+
+  let workbookEntry = null;
+  let rootEntry = null;
+  for (let i = 0; i < dirBuf.length; i += 128) {
+    const entry = dirBuf.subarray(i, i + 128);
+    if (entry.length < 128) break;
+    const nameLen = entry.readUInt16LE(64);
+    if (nameLen === 0) continue;
+    const name = entry.toString("utf16le", 0, nameLen - 2);
+    const startSec = entry.readUInt32LE(116);
+    const size = entry.readUInt32LE(120);
+    if (name === "Root Entry") rootEntry = { startSec, size };
+    else if (name === "Workbook" || name === "Book") workbookEntry = { startSec, size };
+  }
+
+  if (!workbookEntry) return buf;
+
+  const miniFat = [];
+  sec = miniFatStartSec;
+  const visitedMiniFat = new Set();
+  while (sec < 0xFFFFFFFC && !visitedMiniFat.has(sec)) {
+    visitedMiniFat.add(sec);
+    const offset = (sec + 1) * sectorSize;
+    if (offset + sectorSize > buf.length) break;
+    for (let i = 0; i < sectorSize; i += 4) {
+      miniFat.push(buf.readUInt32LE(offset + i));
+    }
+    sec = fat[sec] !== undefined ? fat[sec] : 0xFFFFFFFF;
+  }
+
+  let miniStream = Buffer.alloc(0);
+  if (rootEntry) {
+    sec = rootEntry.startSec;
+    const visitedRoot = new Set();
+    while (sec < 0xFFFFFFFC && !visitedRoot.has(sec)) {
+      visitedRoot.add(sec);
+      const offset = (sec + 1) * sectorSize;
+      if (offset + sectorSize > buf.length) break;
+      miniStream = Buffer.concat([miniStream, buf.subarray(offset, offset + sectorSize)]);
+      sec = fat[sec] !== undefined ? fat[sec] : 0xFFFFFFFF;
+    }
+  }
+
+  let streamBuf = Buffer.alloc(0);
+  if (workbookEntry.size < minSizeStandardStream) {
+    sec = workbookEntry.startSec;
+    const visitedStream = new Set();
+    while (sec < 0xFFFFFFFC && !visitedStream.has(sec)) {
+      visitedStream.add(sec);
+      const offset = sec * miniSectorSize;
+      if (offset + miniSectorSize > miniStream.length) break;
+      streamBuf = Buffer.concat([streamBuf, miniStream.subarray(offset, offset + miniSectorSize)]);
+      sec = miniFat[sec] !== undefined ? miniFat[sec] : 0xFFFFFFFF;
+    }
+  } else {
+    sec = workbookEntry.startSec;
+    const visitedStream = new Set();
+    while (sec < 0xFFFFFFFC && !visitedStream.has(sec)) {
+      visitedStream.add(sec);
+      const offset = (sec + 1) * sectorSize;
+      if (offset + sectorSize > buf.length) break;
+      streamBuf = Buffer.concat([streamBuf, buf.subarray(offset, offset + sectorSize)]);
+      sec = fat[sec] !== undefined ? fat[sec] : 0xFFFFFFFF;
+    }
+  }
+  return streamBuf.subarray(0, workbookEntry.size);
+}
+
+async function extractImagesFromBuffer(buf: Buffer): Promise<ExtractedRawImage[]> {
+  const images: ExtractedRawImage[] = [];
+  if (!buf || buf.length < 500) return images;
+
+  // Re-assemble Workbook stream to remove OLE2 sector / BIFF record continuation fragment headers
+  const wbStream = getWorkbookStream(buf);
+
+  // Parse BIFF8 records to build drawing streams
+  const drawingStreams: Buffer[] = [];
+  let currentDrawingPayloads: Buffer[] = [];
+
+  let pos = 0;
+  while (pos < wbStream.length - 4) {
+    const type = wbStream.readUInt16LE(pos);
+    const len = wbStream.readUInt16LE(pos + 2);
+    pos += 4;
+
+    if (pos + len > wbStream.length) break;
+    const payload = wbStream.subarray(pos, pos + len);
+    pos += len;
+
+    if (type === 0x00EC || type === 0x00EB) {
+      // MSODRAWING or MSODRAWINGGROUP
+      if (currentDrawingPayloads.length > 0) {
+        drawingStreams.push(Buffer.concat(currentDrawingPayloads));
+        currentDrawingPayloads = [];
+      }
+      currentDrawingPayloads.push(payload);
+    } else if (type === 0x003C) {
+      // CONTINUE
+      if (currentDrawingPayloads.length > 0) {
+        currentDrawingPayloads.push(payload);
+      }
+    } else {
+      // Other record type
+      if (currentDrawingPayloads.length > 0) {
+        drawingStreams.push(Buffer.concat(currentDrawingPayloads));
+        currentDrawingPayloads = [];
+      }
+    }
+  }
+  if (currentDrawingPayloads.length > 0) {
+    drawingStreams.push(Buffer.concat(currentDrawingPayloads));
+  }
+
+  // Scan clean contiguous drawing streams for JPEGs and PNGs
+  for (const dStream of drawingStreams) {
+    // 1. Scan for JPEGs (FF D8 FF)
+    let p = 0;
+    while (p < dStream.length - 4) {
+      if (dStream[p] === 0xFF && dStream[p + 1] === 0xD8 && dStream[p + 2] === 0xFF) {
+        let end = p + 3;
+        while (end < dStream.length - 1) {
+          if (dStream[end] === 0xFF && dStream[end + 1] === 0xD9) {
+            const jpegLen = (end + 2) - p;
+            const candidate = dStream.subarray(p, p + jpegLen);
+            if (candidate.length > 200) {
+              let w = 120;
+              let h = 90;
+              let nameKey: string | undefined = undefined;
+              try {
+                const meta = await sharp(candidate).metadata();
+                if (meta && meta.width && meta.height) {
+                  w = meta.width;
+                  h = meta.height;
+                }
+              } catch {}
+
+              try {
+                const strSample = candidate.toString('binary');
+                const match =
+                  strSample.match(/(Legenda_[A-Za-z0-9_\+\-\.]+)/i) ||
+                  strSample.match(/(Foto\d+_[A-Za-z0-9_\+\-\.]+)/i) ||
+                  strSample.match(/([A-Za-z0-9_\+\-]+\.jpg)/i);
+                if (match) {
+                  nameKey = cleanImageKey(match[1]);
+                }
+              } catch {}
+
+              images.push({
+                buffer: candidate,
+                format: 'JPEG',
+                width: w,
+                height: h,
+                nameKey,
+              });
+            }
+            p = end + 1;
+            break;
+          }
+          end++;
+        }
+      }
+      p++;
+    }
+
+    // 2. Scan for PNGs (Header: 89 50 4E 47 0D 0A 1A 0A)
+    p = 0;
+    const pngHeader = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    const pngIend = Buffer.from([0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82]);
+
+    while (p < dStream.length - 8) {
+      if (dStream.subarray(p, p + 8).equals(pngHeader)) {
+        let iendIdx = dStream.indexOf(pngIend, p + 8);
+        if (iendIdx !== -1) {
+          const candidate = dStream.subarray(p, iendIdx + 8);
+          if (candidate.length > 200) {
+            try {
+              const meta = await sharp(candidate).metadata();
+              if (meta && meta.width && meta.height) {
+                images.push({
+                  buffer: candidate,
+                  format: 'PNG',
+                  width: meta.width,
+                  height: meta.height,
+                });
+                p = iendIdx + 8;
+                continue;
+              }
+            } catch {}
+          }
+        }
+      }
+      p++;
+    }
+  }
+
+  // Fallback: If no images found inside clean drawings streams, scan raw buffer
+  if (images.length === 0) {
+    let p = 0;
+    while (p < buf.length - 4) {
+      if (buf[p] === 0xFF && buf[p + 1] === 0xD8 && buf[p + 2] === 0xFF) {
+        let end = p + 3;
+        while (end < buf.length - 1) {
+          if (buf[end] === 0xFF && buf[end + 1] === 0xD9) {
+            const jpegLen = (end + 2) - p;
+            const candidate = buf.subarray(p, p + jpegLen);
+            if (candidate.length > 500) {
+              let w = 120;
+              let h = 90;
+              let nameKey: string | undefined = undefined;
+              try {
+                const meta = await sharp(candidate).metadata();
+                if (meta && meta.width && meta.height) {
+                  w = meta.width;
+                  h = meta.height;
+                }
+              } catch {}
+
+              try {
+                const strSample = candidate.toString('binary');
+                const match =
+                  strSample.match(/(Legenda_[A-Za-z0-9_\+\-\.]+)/i) ||
+                  strSample.match(/(Foto\d+_[A-Za-z0-9_\+\-\.]+)/i) ||
+                  strSample.match(/([A-Za-z0-9_\+\-]+\.jpg)/i);
+                if (match) {
+                  nameKey = cleanImageKey(match[1]);
+                }
+              } catch {}
+
+              images.push({
+                buffer: candidate,
+                format: 'JPEG',
+                width: w,
+                height: h,
+                nameKey,
+              });
+            }
+            p = end + 1;
+            break;
+          }
+          end++;
+        }
+      }
+      p++;
+    }
+  }
+
+  return images;
+}
+
+function extractAnchorsFromBiff8(buf: Buffer): { col1: number; row1: number; col2: number; row2: number }[] {
+  const anchors: { col1: number; row1: number; col2: number; row2: number }[] = [];
+  let pos = 0;
+  while (pos < buf.length - 8) {
+    if (buf[pos + 2] === 0x10 && buf[pos + 3] === 0xf0) {
+      const recLen = buf.readUInt32LE(pos + 4);
+      if (recLen >= 18 && pos + 8 + recLen <= buf.length) {
+        const payload = buf.subarray(pos + 8, pos + 8 + recLen);
+        const col1 = payload.readUInt16LE(2);
+        const row1 = payload.readUInt16LE(6);
+        const col2 = payload.readUInt16LE(10);
+        const row2 = payload.readUInt16LE(14);
+        if (row1 >= 0 && col1 >= 0 && row1 < 20000 && col1 < 500) {
+          anchors.push({ col1, row1, col2, row2 });
+        }
+        pos += 8 + recLen;
+        continue;
+      }
+    }
+    pos++;
+  }
+  return anchors;
+}
+
+async function convertXlsToXlsxWithImages(xlsPath: string, outputPath: string) {
+  try {
+    const fileBuf = fs.readFileSync(xlsPath);
+    const extractedImages = await extractImagesFromBuffer(fileBuf);
+    const biffAnchors = extractAnchorsFromBiff8(fileBuf);
+
+    const xlsWorkbook = XLSX.readFile(xlsPath, { cellDates: true, raw: false });
+
+    if (extractedImages.length === 0) {
+      XLSX.writeFile(xlsWorkbook, outputPath, { bookType: 'xlsx' });
+      return;
+    }
+
+    const wb = new ExcelJS.Workbook();
+
+    for (const sheetName of xlsWorkbook.SheetNames) {
+      const sheet = xlsWorkbook.Sheets[sheetName];
+      if (!sheet) continue;
+
+      const ws = wb.addWorksheet(sheetName);
+      const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+
+      if (rawRows.length === 0) continue;
+
+      rawRows.forEach((rowVals) => {
+        ws.addRow(rowVals);
+      });
+
+      // Identify photo columns
+      const headerRow = rawRows[0] || [];
+      const photoColIndices: number[] = [];
+
+      headerRow.forEach((colName: any, idx: number) => {
+        const colStr = String(colName || '').toLowerCase().replace(/[\s_\-]/g, '');
+        if (
+          colStr.match(/^foto\d+$/) ||
+          colStr.startsWith('foto') ||
+          colStr.includes('imagem') ||
+          colStr.includes('fotografia') ||
+          colStr.includes('img')
+        ) {
+          photoColIndices.push(idx); // 0-based
+        }
+      });
+
+      // If we have BIFF8 ClientAnchors mapping 1-to-1 to extracted images, embed images at exact cell coordinates
+      if (biffAnchors.length > 0) {
+        let finalAnchors = biffAnchors;
+        if (photoColIndices.length > 0) {
+          const photoColIndicesSet = new Set(photoColIndices);
+          finalAnchors = biffAnchors
+            .filter((a) => photoColIndicesSet.has(a.col1) && a.row1 >= 1)
+            .sort((a, b) => {
+              if (a.row1 !== b.row1) return a.row1 - b.row1;
+              return a.col1 - b.col1;
+            });
+        }
+
+        const count = Math.min(finalAnchors.length, extractedImages.length);
+        for (let i = 0; i < count; i++) {
+          const anchor = finalAnchors[i];
+          const imgItem = extractedImages[i];
+          try {
+            const imageId = wb.addImage({
+              buffer: imgItem.buffer,
+              extension: imgItem.format === 'PNG' ? 'png' : 'jpeg',
+            });
+
+            ws.addImage(imageId, {
+              tl: { col: anchor.col1, row: anchor.row1 },
+              ext: { width: 120, height: 90 },
+              editAs: 'oneCell',
+            });
+          } catch (addErr) {
+            console.warn(`Error adding image ${i} to anchor R${anchor.row1}C${anchor.col1}:`, addErr);
+          }
+        }
+      } else {
+        // Fallback: match by photo columns or text
+        if (photoColIndices.length > 0) {
+          const photoCells: { row: number; col: number; text: string }[] = [];
+          for (let r = 2; r <= rawRows.length; r++) {
+            const rowVals = rawRows[r - 1] || [];
+            for (const colIdx of photoColIndices) {
+              const val = String(rowVals[colIdx] || '').trim();
+              photoCells.push({ row: r, col: colIdx + 1, text: val });
+            }
+          }
+
+          const usedImgIndices = new Set<number>();
+          photoCells.forEach((pCell) => {
+            let matchedImgIdx = -1;
+            if (pCell.text) {
+              const cleanVal = cleanImageKey(pCell.text);
+              const baseVal = cleanImageKey(path.basename(pCell.text));
+              for (let i = 0; i < extractedImages.length; i++) {
+                if (usedImgIndices.has(i)) continue;
+                const img = extractedImages[i];
+                if (img.nameKey) {
+                  if (
+                    cleanVal.includes(img.nameKey) ||
+                    img.nameKey.includes(cleanVal) ||
+                    baseVal.includes(img.nameKey) ||
+                    img.nameKey.includes(baseVal)
+                  ) {
+                    matchedImgIdx = i;
+                    break;
+                  }
+                }
+              }
+            }
+
+            if (matchedImgIdx >= 0 && matchedImgIdx < extractedImages.length) {
+              usedImgIndices.add(matchedImgIdx);
+              const imgItem = extractedImages[matchedImgIdx];
+              try {
+                const imageId = wb.addImage({
+                  buffer: imgItem.buffer,
+                  extension: imgItem.format === 'PNG' ? 'png' : 'jpeg',
+                });
+                ws.addImage(imageId, {
+                  tl: { col: pCell.col - 1, row: pCell.row - 1 },
+                  ext: { width: 120, height: 90 },
+                  editAs: 'oneCell',
+                });
+              } catch (addErr) {
+                console.warn(`Error adding image to cell R${pCell.row}C${pCell.col}:`, addErr);
+              }
+            }
+          });
+        }
+      }
+    }
+
+    await wb.xlsx.writeFile(outputPath);
+  } catch (err) {
+    console.error('Error in convertXlsToXlsxWithImages:', err);
+    try {
+      const xlsWorkbook = XLSX.readFile(xlsPath, { cellDates: true, raw: false });
+      XLSX.writeFile(xlsWorkbook, outputPath, { bookType: 'xlsx' });
+    } catch {}
+  }
+}
+
 async function extractMediaFromZipWorkbook(filePath: string): Promise<ExtractedMediaStore> {
   const store: ExtractedMediaStore = {
     byName: new Map(),
@@ -1341,13 +2261,13 @@ async function extractMediaFromZipWorkbook(filePath: string): Promise<ExtractedM
             if (meta.format === 'png') {
               format = 'PNG';
               processedBuffer = await sharp(rawBuffer)
-                .resize({ width: 600, height: 600, fit: 'inside', withoutEnlargement: true })
+                .resize({ width: 1200, height: 1200, fit: 'inside', withoutEnlargement: true })
                 .png()
                 .toBuffer();
             } else {
               format = 'JPEG';
               processedBuffer = await sharp(rawBuffer)
-                .resize({ width: 600, height: 600, fit: 'inside', withoutEnlargement: true })
+                .resize({ width: 1200, height: 1200, fit: 'inside', withoutEnlargement: true })
                 .jpeg({ quality: 85 })
                 .toBuffer();
             }
@@ -1431,7 +2351,16 @@ async function extractMediaFromZipWorkbook(filePath: string): Promise<ExtractedM
             const col0 = colEl ? parseInt(colEl.textContent || '-1', 10) : -1;
 
             const blipEl = el.getElementsByTagName('a:blip').item(0) || el.getElementsByTagName('blip').item(0);
-            const rId = blipEl?.getAttribute('r:embed') || blipEl?.getAttribute('embed') || '';
+            let rId = blipEl?.getAttribute('r:embed') || blipEl?.getAttribute('embed') || blipEl?.getAttribute('r:link') || blipEl?.getAttribute('link') || '';
+            if (!rId && blipEl?.attributes) {
+              for (let i = 0; i < blipEl.attributes.length; i++) {
+                const attr = blipEl.attributes.item(i);
+                if (attr && (attr.name === 'r:embed' || attr.name === 'embed' || attr.localName === 'embed')) {
+                  rId = attr.value;
+                  break;
+                }
+              }
+            }
 
             const cNvPrEl = el.getElementsByTagName('xdr:cNvPr').item(0) || el.getElementsByTagName('cNvPr').item(0);
             const name = cNvPrEl?.getAttribute('name') || '';
@@ -1544,6 +2473,7 @@ app.get('/api/download-pdf/:downloadId', async (req, res) => {
     const cellImages = new Map<string, ExtractedMediaItem>();
     const totalRows = ws.rowCount;
     let hasAnyImages = false;
+    let globalPhotoCellIdx = 0;
 
     for (let r = 2; r <= totalRows; r++) {
       const row = ws.getRow(r);
@@ -1575,53 +2505,31 @@ app.get('/api/download-pdf/:downloadId', async (req, res) => {
         // Check if an image matches this cell
         let matchedImage: ExtractedMediaItem | undefined;
 
-        // 1. Match by cell coordinate (r, originalCol)
-        const cellKey = `${r}:${originalCol}`;
-        if (mediaStore.byCell.has(cellKey)) {
-          matchedImage = mediaStore.byCell.get(cellKey);
-        }
-
-        // 2. Match by cell filename text
-        if (!matchedImage && trimmedVal) {
-          const cleanKey = cleanImageKey(trimmedVal);
-          const baseNameClean = cleanImageKey(path.basename(trimmedVal));
-          const noExtClean = cleanImageKey(trimmedVal.replace(/\.[^.]+$/, ''));
-
-          matchedImage =
-            mediaStore.byName.get(cleanKey) ||
-            mediaStore.byName.get(baseNameClean) ||
-            mediaStore.byName.get(noExtClean);
-
-          if (
-            !matchedImage &&
-            (cleanKey.includes('foto') ||
-              cleanKey.includes('drenagem') ||
-              cleanKey.includes('jpg') ||
-              cleanKey.includes('png'))
-          ) {
-            for (const [k, img] of mediaStore.byName.entries()) {
-              if (k.length > 5 && (cleanKey.includes(k) || k.includes(cleanKey))) {
-                matchedImage = img;
-                break;
-              }
-            }
+        if (colInfo.isPhoto) {
+          // 1. Match by cell coordinate (r, originalCol)
+          const cellKey = `${r}:${originalCol}`;
+          if (mediaStore.byCell.has(cellKey)) {
+            matchedImage = mediaStore.byCell.get(cellKey);
           }
-        }
 
-        // 3. Match by photo column order if only sequential images exist
-        if (
-          !matchedImage &&
-          colInfo.isPhoto &&
-          trimmedVal &&
-          (trimmedVal.endsWith('.jpg') ||
-            trimmedVal.endsWith('.png') ||
-            trimmedVal.endsWith('.jpeg'))
-        ) {
-          const simpleName = path.basename(trimmedVal).toLowerCase();
-          for (const [k, img] of mediaStore.byName.entries()) {
-            if (simpleName.includes(k) || k.includes(simpleName)) {
-              matchedImage = img;
-              break;
+          // 2. Match by cell filename text
+          if (!matchedImage && trimmedVal) {
+            const cleanKey = cleanImageKey(trimmedVal);
+            const baseNameClean = cleanImageKey(path.basename(trimmedVal));
+            const noExtClean = cleanImageKey(trimmedVal.replace(/\.[^.]+$/, ''));
+
+            matchedImage =
+              mediaStore.byName.get(cleanKey) ||
+              mediaStore.byName.get(baseNameClean) ||
+              mediaStore.byName.get(noExtClean);
+
+            if (!matchedImage) {
+              for (const [k, img] of mediaStore.byName.entries()) {
+                if (k.length > 5 && (cleanKey.includes(k) || k.includes(cleanKey))) {
+                  matchedImage = img;
+                  break;
+                }
+              }
             }
           }
         }
@@ -1670,6 +2578,12 @@ app.get('/api/download-pdf/:downloadId', async (req, res) => {
     const featureName =
       processedInfo.featureType === 'sinalizacao_vertical'
         ? 'Sinalização Vertical'
+        : processedInfo.featureType === 'sinalizacao_horizontal_dispositivo'
+        ? 'Sinalização Horizontal - Dispositivo'
+        : processedInfo.featureType === 'sinalizacao_horizontal_marca_viaria'
+        ? 'Sinalização Horizontal - Marca Viária'
+        : processedInfo.featureType === 'sinalizacao_horizontal_zebrado'
+        ? 'Sinalização Horizontal - Zebrado'
         : processedInfo.featureType === 'drenagem_superficial'
         ? 'Drenagem Superficial'
         : 'Drenagem Profunda';
@@ -1782,7 +2696,9 @@ app.get('/api/download-pdf/:downloadId', async (req, res) => {
               const posX = data.cell.x + (data.cell.width - imgW) / 2;
               const posY = data.cell.y + (data.cell.height - imgH) / 2;
 
-              doc.addImage(img.base64, img.format, posX, posY, imgW, imgH);
+              const prefix = img.format === 'PNG' ? 'data:image/png;base64,' : 'data:image/jpeg;base64,';
+              const imgDataUri = img.base64.startsWith('data:') ? img.base64 : `${prefix}${img.base64}`;
+              doc.addImage(imgDataUri, img.format, posX, posY, imgW, imgH);
 
               // Subtle rounded border around photo
               doc.setDrawColor(203, 213, 225);
@@ -2206,6 +3122,11 @@ setInterval(() => {
     }
   }
 }, 10 * 60 * 1000);
+
+// API 404 fallback - prevents unmatched API routes from serving Vite HTML
+app.all('/api/*', (req, res) => {
+  res.status(404).json({ error: `Rota de API ${req.method} ${req.path} não encontrada.` });
+});
 
 // Setup Vite or static serving
 async function startServer() {

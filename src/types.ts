@@ -1,4 +1,10 @@
-export type DrainageFeatureType = 'drenagem_profunda' | 'drenagem_superficial' | 'sinalizacao_vertical';
+export type DrainageFeatureType =
+  | 'drenagem_profunda'
+  | 'drenagem_superficial'
+  | 'sinalizacao_vertical'
+  | 'sinalizacao_horizontal_dispositivo'
+  | 'sinalizacao_horizontal_marca_viaria'
+  | 'sinalizacao_horizontal_zebrado';
 
 export interface ColumnInfo {
   index: number;

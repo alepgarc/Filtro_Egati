@@ -23,6 +23,7 @@ import {
   DRAINAGE_FEATURES,
   isDefaultPresetField,
   normalizeColKey,
+  matchesEstadoFilterFrontend,
 } from '../constants/presets';
 
 interface TurboModeModalProps {
@@ -128,7 +129,15 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
   rowFiltersData,
   totalRows,
 }) => {
+  const isReprovadoFeature =
+    featureType === 'sinalizacao_vertical' ||
+    featureType === 'sinalizacao_horizontal_dispositivo' ||
+    featureType === 'sinalizacao_horizontal_marca_viaria' ||
+    featureType === 'sinalizacao_horizontal_zebrado';
+  const defaultFilterValue = isReprovadoFeature ? 'Reprovado' : 'PRECÁRIO';
+
   const [items, setItems] = useState<RodoviaProcessItem[]>([]);
+  const [selectedEstadoFilter, setSelectedEstadoFilter] = useState<string>(defaultFilterValue);
   const [isRunning, setIsRunning] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
   const [currentProcessingIndex, setCurrentProcessingIndex] = useState<number>(-1);
@@ -139,7 +148,34 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
 
   const featureConfig = DRAINAGE_FEATURES[featureType];
 
-  // Initialize items when modal opens or inputs change
+  // Extract all unique non-empty status values from rowFiltersData
+  const availableStatusOptions = React.useMemo(() => {
+    const seenNorm = new Set<string>();
+    const uniqueOptions: string[] = [];
+
+    const addOption = (val: string) => {
+      const norm = normalizeColKey(val);
+      if (!seenNorm.has(norm)) {
+        seenNorm.add(norm);
+        uniqueOptions.push(val);
+      }
+    };
+
+    addOption(defaultFilterValue);
+
+    if (rowFiltersData && rowFiltersData.length > 0) {
+      rowFiltersData.forEach((row) => {
+        if (row.e && row.e.trim()) {
+          addOption(row.e.trim());
+        }
+      });
+    }
+
+    addOption('Todos');
+    return uniqueOptions;
+  }, [rowFiltersData, defaultFilterValue]);
+
+  // Initialize and update items when modal opens or inputs/filters change
   useEffect(() => {
     if (!isOpen) return;
 
@@ -150,10 +186,8 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
     setCurrentStepText('');
     setOverallError(null);
 
-    // Calculate rodovia items with target filter count (Reprovado for Sinalização Vertical, PRECÁRIO for others)
-    const isVerticalSignal = featureType === 'sinalizacao_vertical';
-    const targetFilterValue = isVerticalSignal ? 'Reprovado' : 'PRECÁRIO';
-    const targetFilterNorm = normalizeColKey(targetFilterValue);
+    const targetFilterNorm = normalizeColKey(selectedEstadoFilter);
+    const isTodos = selectedEstadoFilter.toUpperCase() === 'TODOS';
 
     const list: RodoviaProcessItem[] = [];
 
@@ -166,8 +200,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
           rowFiltersData.forEach((row) => {
             if (normalizeColKey(row.r) === normalizeColKey(rod)) {
               totalCount++;
-              const itemNorm = normalizeColKey(row.e);
-              if (itemNorm === targetFilterNorm || itemNorm.startsWith(targetFilterNorm)) {
+              if (matchesEstadoFilterFrontend(row.e, selectedEstadoFilter)) {
                 precaroCount++;
               }
             }
@@ -184,12 +217,10 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
         });
       });
     } else {
-      // If no rodovias are identified, create a single item representing the whole sheet with target filter
       let precaroCount = 0;
       if (rowFiltersData && rowFiltersData.length > 0) {
         precaroCount = rowFiltersData.filter((r) => {
-          const norm = normalizeColKey(r.e);
-          return norm === targetFilterNorm || norm.startsWith(targetFilterNorm);
+          return matchesEstadoFilterFrontend(r.e, selectedEstadoFilter);
         }).length;
       }
       list.push({
@@ -202,7 +233,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
     }
 
     setItems(list);
-  }, [isOpen, availableRodovias, rowFiltersData, totalRows, featureType]);
+  }, [isOpen, availableRodovias, rowFiltersData, totalRows, featureType, selectedEstadoFilter]);
 
   if (!isOpen) return null;
 
@@ -286,8 +317,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
             fileId,
             sheetName,
             columnIndicesToRemove,
-            estadoConservacaoFilter:
-              featureType === 'sinalizacao_vertical' ? 'Reprovado' : 'PRECÁRIO',
+            estadoConservacaoFilter: selectedEstadoFilter,
             rodoviaFilter: rodoviaFilterParam,
             featureType,
           }),
@@ -448,22 +478,32 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                 </div>
               </div>
 
-              <div className="bg-white p-2.5 rounded-lg border border-slate-200 flex items-center gap-2">
-                <div className="w-6 h-6 rounded-md bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
-                  <Filter className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="font-bold text-slate-800">
-                    {featureType === 'sinalizacao_vertical'
-                      ? 'Situação de Retrorrefletância'
-                      : 'Estado de Conservação'}
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 flex items-center gap-2 justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-md bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+                    <Filter className="w-4 h-4" />
                   </div>
-                  <div className="text-[11px] text-amber-700 font-bold">
-                    {featureType === 'sinalizacao_vertical'
-                      ? 'Filtro: REPROVADO (apenas placas reprovadas)'
-                      : 'Filtro: PRECÁRIO (apenas linhas precárias)'}
+                  <div>
+                    <div className="font-bold text-slate-800">
+                      Filtro de Status ({featureConfig.name})
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      Filtrar por resultado/situação
+                    </div>
                   </div>
                 </div>
+                <select
+                  value={selectedEstadoFilter}
+                  onChange={(e) => setSelectedEstadoFilter(e.target.value)}
+                  disabled={isRunning}
+                  className="text-xs font-bold text-amber-900 bg-amber-50 border border-amber-300 rounded-lg px-2.5 py-1 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer disabled:opacity-50"
+                >
+                  {availableStatusOptions.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt === 'Todos' ? 'Todos os Registros' : opt}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
