@@ -264,12 +264,21 @@ function matchesEstadoFilter(cellValue: string, filter: string): boolean {
   const isFilterAprovado =
     filterNorm.startsWith('aprovad') ||
     filterNorm === 'ok' ||
+    filterNorm === 'b' ||
     filterNorm.includes('bom') ||
     filterNorm.includes('conforme');
 
   const isFilterPrecario =
     filterNorm.startsWith('precar') ||
+    filterNorm === 'pr' ||
+    filterNorm === 'prec' ||
     filterNorm.includes('critico');
+
+  const isFilterSuficiente =
+    filterNorm.startsWith('sufic') ||
+    filterNorm === 'su' ||
+    filterNorm === 'sf' ||
+    filterNorm === 's';
 
   if (isFilterReprovado) {
     return (
@@ -285,6 +294,7 @@ function matchesEstadoFilter(cellValue: string, filter: string): boolean {
     return (
       cellNorm.startsWith('aprovad') ||
       cellNorm === 'ok' ||
+      cellNorm === 'b' ||
       cellNorm.includes('bom') ||
       cellNorm.includes('conforme')
     );
@@ -292,10 +302,20 @@ function matchesEstadoFilter(cellValue: string, filter: string): boolean {
   if (isFilterPrecario) {
     return (
       cellNorm.startsWith('precar') ||
+      cellNorm === 'pr' ||
+      cellNorm === 'prec' ||
       cellNorm.includes('ruim') ||
       cellNorm.includes('pessimo') ||
       cellNorm.startsWith('reprovad') ||
       cellNorm.includes('critico')
+    );
+  }
+  if (isFilterSuficiente) {
+    return (
+      cellNorm.startsWith('sufic') ||
+      cellNorm === 'su' ||
+      cellNorm === 'sf' ||
+      cellNorm === 's'
     );
   }
 
@@ -863,7 +883,8 @@ async function processWorkbookWithZip(
       if (isRodoviaCol(headerVal)) {
         rodoviaColLetter = colLetter;
       }
-      if (String(headerVal || '').toLowerCase().trim() === 'km') {
+      const normH = String(headerVal || '').toLowerCase().trim();
+      if (normH === 'km' || normH === 'kmlegenda' || normH === 'km_legenda' || (!kmColLetter && normH.includes('km'))) {
         kmColLetter = colLetter;
       }
     }
@@ -1538,8 +1559,22 @@ async function processWorkbookWithZip(
 
   // Output new zip buffer
   const outBuf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+
+  // Re-save with ExcelJS to ensure absolute compliance and prevent repair errors/blank sheets in spreadsheet viewers
+  let finalBuf = outBuf;
+  try {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(outBuf);
+    wb.worksheets.forEach((ws) => {
+      formatWorksheetLayout(ws);
+    });
+    finalBuf = (await wb.xlsx.writeBuffer()) as Buffer;
+  } catch (resaveErr) {
+    console.warn('ExcelJS compliance re-save failed, falling back to original ZIP buffer:', resaveErr);
+  }
+
   return {
-    buffer: outBuf,
+    buffer: finalBuf,
     originalColumnsCount: totalCols,
     removedColumnsCount: removeSet.size,
     keptColumnsCount: keepIndices.size,
@@ -2087,6 +2122,138 @@ function extractAnchorsFromBiff8(buf: Buffer): { col1: number; row1: number; col
   return anchors;
 }
 
+function formatWorksheetLayout(ws: ExcelJS.Worksheet) {
+  if (!ws || ws.rowCount === 0) return;
+
+  const headerRow = ws.getRow(1);
+  const totalCols = Math.max(ws.columnCount, ws.actualColumnCount || 0);
+  if (totalCols === 0) return;
+
+  // 1. Detect photo columns
+  const photoColIndices = new Set<number>();
+  for (let c = 1; c <= totalCols; c++) {
+    const headerVal = String(headerRow.getCell(c).value || '').toLowerCase().replace(/[\s_\-]/g, '');
+    if (
+      headerVal.includes('foto') ||
+      headerVal.includes('imagem') ||
+      headerVal.includes('fotografia') ||
+      headerVal.includes('img')
+    ) {
+      photoColIndices.add(c);
+    }
+  }
+
+  // Also check if any images are anchored in columns
+  try {
+    const images = (ws as any).getImages ? (ws as any).getImages() : [];
+    images.forEach((img: any) => {
+      if (img && img.range && img.range.tl) {
+        const colIdx = Math.floor(img.range.tl.col) + 1;
+        photoColIndices.add(colIdx);
+      }
+    });
+  } catch {}
+
+  const hasPhotos = photoColIndices.size > 0;
+
+  // 2. Format Header Row (Row 1)
+  headerRow.height = 28;
+  for (let c = 1; c <= totalCols; c++) {
+    const cell = headerRow.getCell(c);
+    cell.font = { bold: true, name: 'Calibri', size: 11, color: { argb: 'FF1F2937' } };
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFF3F4F6' },
+    };
+    cell.border = {
+      bottom: { style: 'medium', color: { argb: 'FFD1D5DB' } },
+      top: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+      left: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+      right: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+    };
+  }
+
+  // 3. Format Data Rows (Row 2..N)
+  const dataRowHeight = hasPhotos ? 75 : 22;
+  for (let r = 2; r <= ws.rowCount; r++) {
+    const row = ws.getRow(r);
+    row.height = dataRowHeight;
+    for (let c = 1; c <= totalCols; c++) {
+      const cell = row.getCell(c);
+      const isPhotoCol = photoColIndices.has(c);
+
+      let hAlign: 'left' | 'center' | 'right' = 'left';
+      if (isPhotoCol) {
+        hAlign = 'center';
+      } else {
+        const val = cell.value;
+        if (typeof val === 'number') {
+          hAlign = 'right';
+        } else {
+          const sVal = String(val || '').trim();
+          if (sVal === 'PR' || sVal === 'OK' || sVal === 'NOK' || sVal.length <= 4) {
+            hAlign = 'center';
+          }
+        }
+      }
+
+      cell.alignment = {
+        vertical: 'middle',
+        horizontal: hAlign,
+        wrapText: !isPhotoCol,
+      };
+
+      cell.border = {
+        bottom: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+        top: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+        left: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+        right: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+      };
+    }
+  }
+
+  // 4. Set Column Widths
+  for (let c = 1; c <= totalCols; c++) {
+    const col = ws.getColumn(c);
+    const headerStr = String(headerRow.getCell(c).value || '').trim();
+    const normHeader = normalizeString(headerStr);
+
+    if (photoColIndices.has(c)) {
+      col.width = 22;
+      continue;
+    }
+
+    let minWidth = 12;
+    if (normHeader === 'codauto' || normHeader === 'codmonitoramento') minWidth = 12;
+    else if (normHeader.includes('tipohoriz')) minWidth = 18;
+    else if (normHeader === 'estado' || normHeader === 'estadoconservacao') minWidth = 10;
+    else if (normHeader.includes('localiz')) minWidth = 20;
+    else if (normHeader === 'rodovia') minWidth = 14;
+    else if (normHeader === 'km' || normHeader === 'kmlegenda') minWidth = 12;
+    else if (normHeader === 'sentido') minWidth = 15;
+    else if (normHeader === 'bordo') minWidth = 18;
+    else if (normHeader === 'cor') minWidth = 12;
+    else if (normHeader.includes('resultado')) minWidth = 16;
+    else if (normHeader.includes('situacao')) minWidth = 16;
+    else if (normHeader.includes('elemento')) minWidth = 16;
+
+    let maxLen = headerStr.length;
+    for (let r = 2; r <= Math.min(ws.rowCount, 200); r++) {
+      const val = ws.getRow(r).getCell(c).value;
+      if (val !== null && val !== undefined) {
+        const strVal = String(val).trim();
+        if (strVal.length > maxLen) {
+          maxLen = strVal.length;
+        }
+      }
+    }
+
+    col.width = Math.min(40, Math.max(minWidth, maxLen + 3));
+  }
+}
+
 async function convertXlsToXlsxWithImages(xlsPath: string, outputPath: string) {
   try {
     const fileBuf = fs.readFileSync(xlsPath);
@@ -2220,6 +2387,10 @@ async function convertXlsToXlsxWithImages(xlsPath: string, outputPath: string) {
         }
       }
     }
+
+    wb.worksheets.forEach((ws) => {
+      formatWorksheetLayout(ws);
+    });
 
     await wb.xlsx.writeFile(outputPath);
   } catch (err) {
