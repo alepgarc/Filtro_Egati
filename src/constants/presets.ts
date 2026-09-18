@@ -135,6 +135,29 @@ export const SINALIZACAO_HORIZONTAL_ZEBRADO_FIELDS = [
   'foto5',
 ] as const;
 
+export const EPS_DEFENSA_FIELDS = [
+  'codAuto',
+  'km',
+  'kmFinal',
+  'sentido',
+  'tipoDefensa',
+  'rodovia',
+  'lado',
+  'observacao',
+  'aparenciaGeral',
+  'Foto1',
+  'Foto2',
+  'Foto3',
+  'Foto4',
+] as const;
+
+export const APARENCIA_GERAL_OPTIONS = [
+  { value: '', label: 'Todas as aparências (sem filtro)' },
+  { value: 'Ruim', label: 'Ruim' },
+  { value: 'Regular', label: 'Regular' },
+  { value: 'Boa', label: 'Boa' },
+] as const;
+
 export const DRAINAGE_FEATURES: Record<DrainageFeatureType, DrainageFeatureConfig> = {
   drenagem_profunda: {
     id: 'drenagem_profunda',
@@ -184,6 +207,14 @@ export const DRAINAGE_FEATURES: Record<DrainageFeatureType, DrainageFeatureConfi
       'Mantém colunas de codAuto, tipoHorizontal, localizacao, rodovia, km, sentido, cor, resultadoGeral e fotos 1 a 5.',
     fields: SINALIZACAO_HORIZONTAL_ZEBRADO_FIELDS,
   },
+  eps_defensa: {
+    id: 'eps_defensa',
+    name: 'EPS - Defensa',
+    tagline: 'Barreira de Concreto, Defensa Metálica e OAE',
+    description:
+      'Mantém colunas de codAuto, km, kmFinal, sentido, tipoDefensa, rodovia, lado, observacao, aparenciaGeral, Foto1 a Foto4.',
+    fields: EPS_DEFENSA_FIELDS,
+  },
 };
 
 export const normalizeColKey = (str: string): string => {
@@ -218,6 +249,10 @@ const sinalizacaoHorizontalZebradoNormSet = new Set(
   SINALIZACAO_HORIZONTAL_ZEBRADO_FIELDS.map((f) => normalizeColKey(f))
 );
 
+const epsDefensaNormSet = new Set(
+  EPS_DEFENSA_FIELDS.map((f) => normalizeColKey(f))
+);
+
 export const isDefaultPresetField = (
   columnName: string,
   feature: DrainageFeatureType = 'drenagem_profunda'
@@ -229,6 +264,10 @@ export const isDefaultPresetField = (
   let normSet: Set<string>;
 
   switch (feature) {
+    case 'eps_defensa':
+      fields = EPS_DEFENSA_FIELDS;
+      normSet = epsDefensaNormSet;
+      break;
     case 'sinalizacao_vertical':
       fields = SINALIZACAO_VERTICAL_FIELDS;
       normSet = sinalizacaoVerticalNormSet;
@@ -351,7 +390,6 @@ export const isDefaultPresetField = (
       norm === 'status' ||
       norm === 'situacao' ||
       norm === 'situacaogeral' ||
-      norm === 'estado' ||
       norm === 'avaliacao' ||
       norm === 'avaliacaogeral'
     ) {
@@ -367,6 +405,99 @@ export const isDefaultPresetField = (
       return true;
     }
     if (norm === 'cor') {
+      return true;
+    }
+  } else if (feature === 'eps_defensa') {
+    if (
+      norm === 'kmfinal' ||
+      norm === 'km_final' ||
+      norm === 'kmfim' ||
+      norm === 'km_fim' ||
+      norm === 'kminicial' ||
+      norm === 'km_inicial' ||
+      norm === 'kmlegenda' ||
+      norm === 'km_legenda'
+    ) {
+      return true;
+    }
+    if (
+      norm === 'tipodefensa' ||
+      norm === 'tipo_defensa' ||
+      norm === 'defensa' ||
+      norm === 'defensaoae' ||
+      norm === 'oae' ||
+      norm === 'tipobarreira' ||
+      norm === 'tipo_barreira' ||
+      norm === 'barreira' ||
+      norm === 'barreiradeconcreto' ||
+      norm === 'tipodispositivo' ||
+      norm === 'tipoelemento' ||
+      norm === 'tipo' ||
+      norm === 'elemento' ||
+      norm === 'dispositivo'
+    ) {
+      return true;
+    }
+    if (
+      norm === 'sentido' ||
+      norm === 'direcao' ||
+      norm === 'pista'
+    ) {
+      return true;
+    }
+    if (
+      norm === 'aparenciageral' ||
+      norm === 'aparencia_geral' ||
+      norm === 'aparencia' ||
+      norm === 'estadoconservacao' ||
+      norm === 'estado_conservacao' ||
+      norm === 'estado' ||
+      norm === 'situacao' ||
+      norm === 'condicao'
+    ) {
+      return true;
+    }
+    if (
+      norm === 'observacao' ||
+      norm === 'obs' ||
+      norm === 'observacoes' ||
+      norm === 'nota' ||
+      norm === 'comentario'
+    ) {
+      return true;
+    }
+    if (
+      norm === 'lado' ||
+      norm === 'bordo' ||
+      norm === 'posicao' ||
+      norm === 'localizacao'
+    ) {
+      return true;
+    }
+    if (
+      norm === 'extensao' ||
+      norm === 'extensaometros' ||
+      norm === 'extensao_m' ||
+      norm === 'comprimento' ||
+      norm === 'extensaototal'
+    ) {
+      return true;
+    }
+    if (
+      norm === 'rodovia' ||
+      norm === 'rodovias' ||
+      norm === 'br' ||
+      norm === 'trecho'
+    ) {
+      return true;
+    }
+    if (
+      norm === 'codauto' ||
+      norm === 'codigo' ||
+      norm === 'cod_auto' ||
+      norm === 'id' ||
+      norm === 'item'
+    ) {
       return true;
     }
   }
@@ -386,6 +517,7 @@ export function matchesEstadoFilterFrontend(itemVal: string, filterVal: string):
   const isFilterReprovado =
     filterNorm.startsWith('reprovad') ||
     filterNorm === 'nok' ||
+    filterNorm === 'ruim' ||
     filterNorm.includes('ruim') ||
     filterNorm.includes('nc') ||
     filterNorm.includes('naoconforme') ||
@@ -394,8 +526,16 @@ export function matchesEstadoFilterFrontend(itemVal: string, filterVal: string):
   const isFilterAprovado =
     filterNorm.startsWith('aprovad') ||
     filterNorm === 'ok' ||
-    filterNorm.includes('bom') ||
+    filterNorm === 'bom' ||
+    filterNorm === 'boa' ||
+    filterNorm.startsWith('bom') ||
+    filterNorm.startsWith('boa') ||
     filterNorm.includes('conforme');
+
+  const isFilterRegular =
+    filterNorm.startsWith('regula') ||
+    filterNorm === 'reg' ||
+    filterNorm === 'r';
 
   const isFilterPrecario =
     filterNorm.startsWith('precar') ||
@@ -405,17 +545,28 @@ export function matchesEstadoFilterFrontend(itemVal: string, filterVal: string):
     return (
       itemNorm.startsWith('reprovad') ||
       itemNorm === 'nok' ||
+      itemNorm === 'ruim' ||
       itemNorm.includes('ruim') ||
       itemNorm.includes('nc') ||
       itemNorm.includes('naoconforme') ||
       itemNorm.includes('pessimo')
     );
   }
+  if (isFilterRegular) {
+    return (
+      itemNorm.startsWith('regula') ||
+      itemNorm === 'reg' ||
+      itemNorm === 'r'
+    );
+  }
   if (isFilterAprovado) {
     return (
       itemNorm.startsWith('aprovad') ||
       itemNorm === 'ok' ||
-      itemNorm.includes('bom') ||
+      itemNorm === 'bom' ||
+      itemNorm === 'boa' ||
+      itemNorm.startsWith('bom') ||
+      itemNorm.startsWith('boa') ||
       itemNorm.includes('conforme')
     );
   }
@@ -430,4 +581,25 @@ export function matchesEstadoFilterFrontend(itemVal: string, filterVal: string):
   }
 
   return false;
+}
+
+/**
+ * Normalizes rodovia names based on the feature type.
+ * Specifically for "EPS - Defensa", any variation of BR-376 (e.g. BR/376 CN, BR/376 TU, BR/376 PR, BR-376 CN, etc.)
+ * is strictly normalized to "BR/376".
+ */
+export function normalizeRodoviaForFeature(rodovia: string, featureType?: string): string {
+  if (!rodovia) return '';
+  const trimmed = rodovia.trim();
+  if (featureType === 'eps_defensa') {
+    const norm = trimmed
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]/g, '');
+    if (norm.includes('376')) {
+      return 'BR/376';
+    }
+  }
+  return trimmed;
 }

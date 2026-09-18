@@ -84,14 +84,33 @@ export const DownloadStep: React.FC<DownloadStepProps> = ({
     try {
       const pdfUrl = result.pdfDownloadUrl || `/api/download-pdf/${result.downloadId}`;
       const response = await fetch(pdfUrl);
-      if (!response.ok) {
+      const contentType = response.headers.get('content-type') || '';
+
+      if (!response.ok || contentType.includes('text/html')) {
         const errorText = await response.text();
+        let serverMsg = '';
+        if (errorText) {
+          try {
+            const parsedJson = JSON.parse(errorText);
+            serverMsg = parsedJson.error || parsedJson.message || '';
+          } catch {
+            if (!errorText.includes('<!doctype') && !errorText.includes('<html')) {
+              serverMsg = errorText.trim();
+            }
+          }
+        }
+        if (serverMsg) {
+          throw new Error(serverMsg);
+        }
+        if (contentType.includes('text/html') || errorText.includes('<!doctype') || errorText.includes('<html')) {
+          throw new Error(`Erro HTTP ${response.status}: O servidor retornou uma resposta inválida ao gerar o PDF.`);
+        }
         throw new Error(errorText || `Erro HTTP ${response.status} ao gerar o arquivo PDF.`);
       }
 
       const blob = await response.blob();
-      if (blob.size === 0) {
-        throw new Error('O PDF gerado possui 0 bytes. Tente novamente.');
+      if (!blob || blob.size < 100) {
+        throw new Error('O PDF gerado é inválido ou muito pequeno (menos de 100 bytes). Tente novamente.');
       }
 
       const pdfFileName = result.fileName.replace(/\.xlsx$/i, '') + '.pdf';

@@ -62,6 +62,10 @@ export default function App() {
   };
 
   const handleStepClick = (step: Step) => {
+    if (step === 1) {
+      handleReset();
+      return;
+    }
     if (canNavigateToStep(step)) {
       setCurrentStep(step);
     }
@@ -70,7 +74,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-100/60 text-slate-800 flex flex-col font-sans selection:bg-emerald-200 selection:text-emerald-900">
       {/* Top Navigation / Brand Header */}
-      <Header />
+      <Header currentStep={currentStep} onReset={handleReset} />
 
       {/* Main Container */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">

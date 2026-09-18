@@ -14,6 +14,7 @@ import {
   Paintbrush,
   Grid3X3,
   Check,
+  Shield,
 } from 'lucide-react';
 import { UploadResponse, DrainageFeatureType } from '../types';
 import { DRAINAGE_FEATURES } from '../constants/presets';
@@ -32,10 +33,23 @@ export const UploadStep: React.FC<UploadStepProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatusText, setUploadStatusText] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Reset state and file input on mount or feature change
+  useEffect(() => {
+    setIsUploading(false);
+    setUploadProgress(0);
+    setUploadStatusText('');
+    setErrorMessage(null);
+    setSelectedFileName(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }, [selectedFeature]);
 
   // Prevent browser from opening files dragged outside the dropzone
   useEffect(() => {
@@ -68,78 +82,194 @@ export const UploadStep: React.FC<UploadStepProps> = ({
       return;
     }
 
-    // 2. Validate file size (100 MB maximum)
-    const MAX_SIZE = 100 * 1024 * 1024;
+    // 2. Validate file size (600 MB maximum for high-resolution photo spreadsheets)
+    const MAX_SIZE = 600 * 1024 * 1024;
     if (file.size > MAX_SIZE) {
       setErrorMessage(
-        `O arquivo ultrapassa o limite de 100 MB (${formatFileSize(file.size)}). Envie uma planilha de até 100 MB.`
+        `O arquivo ultrapassa o limite de 600 MB (${formatFileSize(file.size)}). Envie uma planilha de até 500-600 MB.`
       );
       return;
     }
 
+    // Slice into balanced 8MB chunks: fast transfer per chunk (~15-20s on typical broadband),
+    // preventing proxy timeouts and TCP packet drop over transcontinental links
+    const CHUNK_SIZE = 8 * 1024 * 1024;
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const uploadId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
     setSelectedFileName(file.name);
     setIsUploading(true);
-    setUploadProgress(10);
+    setUploadProgress(5);
+    setUploadStatusText(
+      totalChunks > 1
+        ? `Preparando envio seguro em ${totalChunks} blocos de ${formatFileSize(CHUNK_SIZE)}...`
+        : 'Enviando arquivo para o servidor...'
+    );
 
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('featureType', selectedFeature);
+    // Keepalive ping to ensure nginx auth session stays active throughout the upload
+    const keepAliveTimer = setInterval(() => {
+      fetch('/api/health', { credentials: 'include' }).catch(() => {});
+    }, 20000);
 
-    // Use XMLHttpRequest for accurate upload progress tracking
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/upload', true);
+    try {
+      let finalData: UploadResponse | null = null;
 
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) {
-        const percent = Math.round((event.loaded / event.total) * 90);
-        setUploadProgress(Math.max(10, percent));
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        const start = chunkIndex * CHUNK_SIZE;
+        const end = Math.min(file.size, start + CHUNK_SIZE);
+        const isLastChunk = chunkIndex === totalChunks - 1;
+
+        if (totalChunks > 1) {
+          setUploadStatusText(
+            isLastChunk
+              ? `Enviando e montando bloco final ${chunkIndex + 1} de ${totalChunks}...`
+              : `Enviando bloco ${chunkIndex + 1} de ${totalChunks} (${formatFileSize(end)} de ${formatFileSize(file.size)})...`
+          );
+        }
+
+        // Upload chunk with automatic retry, fresh blob slicing, and server verification
+        let attempts = 0;
+        let success = false;
+        let lastError: Error | null = null;
+
+        while (attempts < 6 && !success) {
+          attempts++;
+
+          // If retrying, check if server already received and saved this chunk to disk
+          if (attempts > 1) {
+            try {
+              const statusRes = await fetch(`/api/upload-status/${uploadId}`, { credentials: 'include' });
+              if (statusRes.ok) {
+                const statusJson = await statusRes.json();
+                if (Array.isArray(statusJson.parts) && statusJson.parts.includes(chunkIndex)) {
+                  console.log(`[Upload] Bloco ${chunkIndex + 1}/${totalChunks} já confirmado no servidor.`);
+                  success = true;
+                  break;
+                }
+              }
+            } catch {}
+          }
+
+          // Always extract a fresh slice from the original File on each attempt
+          const chunkBlob = file.slice(start, end);
+          const formData = new FormData();
+          formData.append('chunk', chunkBlob, file.name);
+          formData.append('chunkIndex', String(chunkIndex));
+          formData.append('totalChunks', String(totalChunks));
+          formData.append('uploadId', uploadId);
+          formData.append('fileName', file.name);
+          formData.append('featureType', selectedFeature);
+
+          try {
+            const chunkRes = await new Promise<any>((resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+              xhr.open('POST', '/api/upload-chunk', true);
+              xhr.withCredentials = true;
+
+              // Generous timeout for regular chunks (4 mins) and final assembly chunk (10 mins)
+              xhr.timeout = isLastChunk ? 10 * 60 * 1000 : 4 * 60 * 1000;
+
+              xhr.upload.onprogress = (evt) => {
+                if (evt.lengthComputable) {
+                  const chunkFraction = evt.loaded / evt.total;
+                  const overallPercent = Math.min(
+                    95,
+                    Math.round(((chunkIndex + chunkFraction) / totalChunks) * 95)
+                  );
+                  setUploadProgress(Math.max(5, overallPercent));
+                }
+              };
+
+              xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                  try {
+                    const resJson = JSON.parse(xhr.responseText);
+                    resolve(resJson);
+                  } catch (e) {
+                    resolve({ status: 'ok' });
+                  }
+                } else {
+                  try {
+                    const resJson = JSON.parse(xhr.responseText);
+                    reject(new Error(resJson.error || `Erro HTTP ${xhr.status} no servidor.`));
+                  } catch {
+                    reject(new Error(`Erro no servidor (${xhr.status}).`));
+                  }
+                }
+              };
+
+              xhr.onerror = () => {
+                reject(
+                  new Error(
+                    `Falha de conexão com o servidor ao enviar o bloco ${chunkIndex + 1} de ${totalChunks}.`
+                  )
+                );
+              };
+
+              xhr.ontimeout = () => {
+                reject(
+                  new Error(
+                    `Tempo limite excedido ao enviar o bloco ${chunkIndex + 1} de ${totalChunks}.`
+                  )
+                );
+              };
+
+              xhr.send(formData);
+            });
+
+            success = true;
+            if (isLastChunk) {
+              finalData = chunkRes;
+            }
+          } catch (chunkErr: any) {
+            lastError = chunkErr;
+            if (attempts < 6) {
+              setUploadStatusText(
+                `Reconectando bloco ${chunkIndex + 1}/${totalChunks} (tentativa ${attempts + 1}/6)...`
+              );
+              // Ping health to re-establish and warm up auth proxy connection
+              try {
+                await fetch('/api/health', { credentials: 'include' });
+              } catch {}
+              await new Promise((r) => setTimeout(r, Math.min(5000, attempts * 1200)));
+            }
+          }
+        }
+
+        if (!success) {
+          throw (
+            lastError ||
+            new Error(
+              `Falha ao enviar o bloco ${chunkIndex + 1} de ${totalChunks} após múltiplas tentativas de conexão.`
+            )
+          );
+        }
       }
-    };
 
-    xhr.onload = () => {
-      setIsUploading(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+      setUploadStatusText('Planilha recebida com sucesso! Analisando abas e colunas...');
+      setUploadProgress(98);
 
-      if (xhr.status >= 200 && xhr.status < 300) {
+      if (finalData && finalData.fileId) {
         setUploadProgress(100);
-        try {
-          const text = xhr.responseText ? xhr.responseText.trim() : '';
-          if (!text || text.startsWith('<')) {
-            setErrorMessage('O servidor retornou uma resposta inesperada. Por favor, tente enviar novamente.');
-            return;
-          }
-          const data: any = JSON.parse(text);
-          if (data && data.fileId) {
-            data.featureType = selectedFeature;
-            onUploadSuccess(data as UploadResponse);
-          } else {
-            setErrorMessage(data?.error || 'Erro ao processar planilha enviada.');
-          }
-        } catch (e: any) {
-          console.error('Error parsing upload response JSON:', e, xhr.responseText);
-          setErrorMessage('Erro ao interpretar os dados da planilha. Tente enviar novamente.');
+        setIsUploading(false);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
         }
+        finalData.featureType = selectedFeature;
+        onUploadSuccess(finalData);
       } else {
-        try {
-          const res = JSON.parse(xhr.responseText);
-          setErrorMessage(res.error || 'Erro ao fazer upload da planilha.');
-        } catch (e) {
-          setErrorMessage('Erro no servidor durante o upload. Verifique o arquivo e tente novamente.');
-        }
+        throw new Error((finalData as any)?.error || 'Erro ao processar estrutura da planilha.');
       }
-    };
-
-    xhr.onerror = () => {
+    } catch (err: any) {
       setIsUploading(false);
+      setUploadProgress(0);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
-      setErrorMessage('Falha na conexão com o servidor. Tente novamente.');
-    };
-
-    xhr.send(formData);
+      setErrorMessage(err.message || 'Erro durante o envio da planilha.');
+    } finally {
+      clearInterval(keepAliveTimer);
+    }
   };
 
   const handleDragEnter = (e: React.DragEvent) => {
@@ -567,13 +697,73 @@ export const UploadStep: React.FC<UploadStepProps> = ({
               </div>
 
               <p className="text-xs text-slate-600 leading-relaxed mt-2">
-                Mantém: <span className="font-semibold text-slate-800">codAuto, tipoHorizontal, localizacao, rodovia, km, sentido, cor, resultadoGeral, foto1 a foto5</span>.
+                Mantém: <span className="font-semibold text-slate-800">codAuto, tipoHorizontal, rodovia, km, sentido, cor, resultadoGeral, foto1 a foto5</span>.
+              </p>
+            </div>
+
+            <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[11px]">
+              <span className="text-slate-500 font-medium">11 colunas mantidas</span>
+              {selectedFeature === 'sinalizacao_horizontal_zebrado' ? (
+                <span className="text-emerald-700 font-bold bg-emerald-100 px-2 py-0.5 rounded-full">
+                  Selecionada
+                </span>
+              ) : (
+                <span className="text-slate-400">Clique para selecionar</span>
+              )}
+            </div>
+          </div>
+
+          {/* Card: EPS - Defensa */}
+          <div
+            id="card-feature-eps-defensa"
+            onClick={() => onFeatureChange('eps_defensa')}
+            className={`relative rounded-xl p-4 border-2 transition-all cursor-pointer flex flex-col justify-between text-left ${
+              selectedFeature === 'eps_defensa'
+                ? 'border-emerald-600 bg-emerald-50/40 shadow-xs ring-1 ring-emerald-400/20'
+                : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/50'
+            }`}
+          >
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                      selectedFeature === 'eps_defensa'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    <Shield className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-800">
+                      EPS - Defensa
+                    </h4>
+                    <span className="text-[11px] text-slate-500">
+                      3 Abas: Barreira, Metálica e OAE
+                    </span>
+                  </div>
+                </div>
+
+                <div
+                  className={`w-5 h-5 rounded-full flex items-center justify-center border transition-all ${
+                    selectedFeature === 'eps_defensa'
+                      ? 'border-emerald-600 bg-emerald-600 text-white'
+                      : 'border-slate-300 bg-white'
+                  }`}
+                >
+                  {selectedFeature === 'eps_defensa' && <Check className="w-3.5 h-3.5" />}
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed mt-2">
+                Mantém: <span className="font-semibold text-slate-800">codAuto, km, kmFinal, sentido, tipoDefensa, rodovia, lado, observacao, aparenciaGeral, Foto1 a Foto4</span>.
               </p>
             </div>
 
             <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[11px]">
               <span className="text-slate-500 font-medium">13 colunas mantidas</span>
-              {selectedFeature === 'sinalizacao_horizontal_zebrado' ? (
+              {selectedFeature === 'eps_defensa' ? (
                 <span className="text-emerald-700 font-bold bg-emerald-100 px-2 py-0.5 rounded-full">
                   Selecionada
                 </span>
@@ -619,8 +809,8 @@ export const UploadStep: React.FC<UploadStepProps> = ({
           {isUploading ? 'Enviando e analisando planilha...' : `Enviar planilha de ${currentFeatureConfig.name}`}
         </h3>
         <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto pointer-events-none">
-          Arraste o arquivo <strong className="text-slate-700 font-semibold">.xlsx</strong> ou <strong className="text-slate-700 font-semibold">.xls</strong> ou clique para selecionar do seu computador. Compatível com arquivos de até{' '}
-          <strong className="text-slate-700 font-semibold">100 MB</strong>.
+          Arraste o arquivo <strong className="text-slate-700 font-semibold">.xlsx</strong> ou <strong className="text-slate-700 font-semibold">.xls</strong> ou clique para selecionar do seu computador. Compatível com planilhas de até{' '}
+          <strong className="text-slate-700 font-semibold">500 MB</strong> com fotos.
         </p>
 
         {/* Upload Progress Bar */}
@@ -636,8 +826,8 @@ export const UploadStep: React.FC<UploadStepProps> = ({
                 style={{ width: `${uploadProgress}%` }}
               />
             </div>
-            <p className="text-[11px] text-slate-400">
-              Identificando abas, cabeçalhos e montando prévia das primeiras 20 linhas...
+            <p className="text-[11px] text-slate-500 font-medium animate-pulse">
+              {uploadStatusText || 'Identificando abas, cabeçalhos e montando prévia das primeiras 20 linhas...'}
             </p>
           </div>
         )}
@@ -649,7 +839,7 @@ export const UploadStep: React.FC<UploadStepProps> = ({
           </span>
           <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 rounded-full font-medium text-slate-700">
             <Database className="w-3.5 h-3.5 text-emerald-600" />
-            Tamanho máximo: 100 MB
+            Tamanho suportado: até 500 MB
           </span>
           <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 rounded-full font-medium text-slate-700">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />

@@ -36,6 +36,9 @@ import {
   SINALIZACAO_HORIZONTAL_DISPOSITIVO_FIELDS,
   SINALIZACAO_HORIZONTAL_MARCA_VIARIA_FIELDS,
   SINALIZACAO_HORIZONTAL_ZEBRADO_FIELDS,
+  EPS_DEFENSA_FIELDS,
+  APARENCIA_GERAL_OPTIONS,
+  normalizeRodoviaForFeature,
 } from '../constants/presets';
 import { TurboModeModal } from './TurboModeModal';
 
@@ -107,6 +110,19 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
     }
   }, [uploadData.featureType, initialFeatureType]);
 
+  // Auto-apply default preset columns on initial mount if not yet selected
+  useEffect(() => {
+    if (sheetDetails?.columns && sheetDetails.columns.length > 0) {
+      setSelectedForKeeping((prev) => {
+        if (prev.size > 0) return prev;
+        const matchingIdxs = sheetDetails.columns
+          .filter((col) => isDefaultPresetField(col.name, featureType))
+          .map((col) => col.index);
+        return new Set(matchingIdxs);
+      });
+    }
+  }, [sheetDetails, featureType]);
+
   const featureConfig = DRAINAGE_FEATURES[featureType];
 
   // Switch sheet
@@ -125,8 +141,11 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
       const newDetails: SheetDetails = await res.json();
       setActiveSheet(newSheetName);
       setSheetDetails(newDetails);
-      // Reset selections and filters for new sheet
-      setSelectedForKeeping(new Set());
+      // Auto-apply preset matching columns for the newly selected sheet
+      const matchingIdxs = newDetails.columns
+        .filter((col) => isDefaultPresetField(col.name, featureType))
+        .map((col) => col.index);
+      setSelectedForKeeping(new Set(matchingIdxs));
       setEstadoFilter('');
       setRodoviaFilter('');
       setSearchQuery('');
@@ -292,18 +311,18 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
     const set = new Set<string>();
     if (sheetDetails.rodoviaOptions && sheetDetails.rodoviaOptions.length > 0) {
       sheetDetails.rodoviaOptions.forEach((r) => {
-        if (r && r.trim()) set.add(r.trim());
+        if (r && r.trim()) set.add(normalizeRodoviaForFeature(r.trim(), featureType));
       });
     } else if (rodoviaColRelativeIdx >= 0) {
       sheetDetails.previewRows.forEach((row) => {
         const val = String(row[rodoviaColRelativeIdx] || '').trim();
-        if (val) set.add(val);
+        if (val) set.add(normalizeRodoviaForFeature(val, featureType));
       });
     }
     return Array.from(set).sort((a, b) =>
       a.localeCompare(b, 'pt-BR', { numeric: true, sensitivity: 'base' })
     );
-  }, [sheetDetails.rodoviaOptions, sheetDetails.previewRows, rodoviaColRelativeIdx]);
+  }, [sheetDetails.rodoviaOptions, sheetDetails.previewRows, rodoviaColRelativeIdx, featureType]);
 
   // Count how many TOTAL rows in the ENTIRE sheet match both active filters in conjunction
   const matchingRealRowsCount = useMemo(() => {
@@ -322,23 +341,31 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
       }
 
       if (rodoviaFilter) {
-        matchesRodovia = normalizeColKey(item.r) === normalizeColKey(rodoviaFilter);
+        const normItemRod = normalizeRodoviaForFeature(item.r, featureType);
+        const normFilterRod = normalizeRodoviaForFeature(rodoviaFilter, featureType);
+        matchesRodovia =
+          normalizeColKey(normItemRod) === normalizeColKey(normFilterRod) ||
+          normItemRod === normFilterRod ||
+          normalizeColKey(item.r) === normalizeColKey(rodoviaFilter);
       }
 
       return matchesEstado && matchesRodovia;
     }).length;
-  }, [estadoFilter, rodoviaFilter, sheetDetails.rowFiltersData, sheetDetails.totalRows]);
+  }, [estadoFilter, rodoviaFilter, sheetDetails.rowFiltersData, sheetDetails.totalRows, featureType]);
 
   const isHorizontalFeature =
     featureType === 'sinalizacao_horizontal_dispositivo' ||
     featureType === 'sinalizacao_horizontal_marca_viaria' ||
     featureType === 'sinalizacao_horizontal_zebrado';
 
-  const activeStatusOptions = isHorizontalFeature
-    ? RESULTADO_GERAL_OPTIONS
-    : featureType === 'sinalizacao_vertical'
-    ? SINALIZACAO_RETRORREFLETANCIA_OPTIONS
-    : ESTADO_CONSERVACAO_OPTIONS;
+  const activeStatusOptions =
+    featureType === 'eps_defensa'
+      ? APARENCIA_GERAL_OPTIONS
+      : isHorizontalFeature
+      ? RESULTADO_GERAL_OPTIONS
+      : featureType === 'sinalizacao_vertical'
+      ? SINALIZACAO_RETRORREFLETANCIA_OPTIONS
+      : ESTADO_CONSERVACAO_OPTIONS;
 
   const totalColumns = sheetDetails.columns.length;
   const keptCount = selectedForKeeping.size;
@@ -465,16 +492,18 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
               <option value="sinalizacao_horizontal_dispositivo">SH - Dispositivo</option>
               <option value="sinalizacao_horizontal_marca_viaria">SH - Marca Viária</option>
               <option value="sinalizacao_horizontal_zebrado">SH - Zebrado</option>
+              <option value="eps_defensa">EPS - Defensa</option>
             </select>
           </div>
 
           <button
             type="button"
             onClick={onBackToUpload}
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 px-3 py-2 rounded-xl hover:bg-slate-100 transition-colors border border-slate-200 cursor-pointer"
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700 hover:text-slate-950 px-3 py-2 rounded-xl hover:bg-slate-100 transition-colors border border-slate-300 bg-white cursor-pointer shadow-2xs"
+            title="Voltar para a Etapa 1 e enviar uma nova planilha"
           >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Trocar arquivo</span>
+            <ArrowLeft className="w-3.5 h-3.5 text-slate-500" />
+            <span>Voltar para Etapa 1</span>
           </button>
         </div>
       </div>
@@ -617,12 +646,14 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                 <p className="text-xs text-slate-600 leading-relaxed">
                   Campos mantidos pela feature:{' '}
                   <span className="font-mono text-[11px] text-slate-800 bg-white/70 px-1.5 py-0.5 rounded border border-slate-200/60 inline-block mt-0.5">
-                    {featureType === 'sinalizacao_horizontal_dispositivo'
-                      ? 'CodAuto, TipoHorizontal, Localização, Rodovia, Km, Sentido, Bordo, Cor, Resultado Geral, Foto 1 a Foto 5'
+                    {featureType === 'eps_defensa'
+                      ? 'codAuto, km, kmFinal, sentido, tipoDefensa, rodovia, lado, observacao, aparenciaGeral, Foto1, Foto2, Foto3, Foto4'
+                      : featureType === 'sinalizacao_horizontal_dispositivo'
+                      ? 'CodAuto, TipoHorizontal, Rodovia, Km, Sentido, Bordo, Cor, Resultado Geral, Foto 1 a Foto 5'
                       : featureType === 'sinalizacao_horizontal_marca_viaria'
-                      ? 'CodAuto, Localização, Rodovia, Km, Sentido, TipoHorizontal, Tipo, Cor, Foto 1 a Foto 5, Resultado'
+                      ? 'CodAuto, Rodovia, Km, Sentido, TipoHorizontal, Tipo, Cor, Foto 1 a Foto 5, Resultado'
                       : featureType === 'sinalizacao_horizontal_zebrado'
-                      ? 'codAuto, tipoHorizontal, localizacao, rodovia, km, sentido, cor, resultadoGeral, foto1 a foto5'
+                      ? 'codAuto, tipoHorizontal, rodovia, km, sentido, cor, resultadoGeral, foto1 a foto5'
                       : featureType === 'sinalizacao_vertical'
                       ? 'codAuto, rodovia, sentido, km, posicao, localizacao, lado, codigoTipo, materialSuporte, largura, altura, metro2, foto1 a foto7, Situação Retrorrefletancia, ObservacaoPlacaDanificada'
                       : featureType === 'drenagem_superficial'
@@ -779,7 +810,9 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                     className="text-sm font-bold text-slate-900 cursor-pointer flex items-center gap-1.5"
                   >
                     <span>
-                      {isHorizontalFeature
+                      {featureType === 'eps_defensa'
+                        ? 'Filtro de Linhas por Aparência Geral'
+                        : isHorizontalFeature
                         ? featureType === 'sinalizacao_horizontal_marca_viaria'
                           ? 'Filtro de Linhas por Resultado'
                           : 'Filtro de Linhas por Resultado Geral'
@@ -804,7 +837,9 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                     </span>
                   ) : (
                     <span className="text-[10px] text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded border border-amber-200">
-                      {isHorizontalFeature
+                      {featureType === 'eps_defensa'
+                        ? 'Coluna aparenciaGeral não encontrada nesta aba'
+                        : isHorizontalFeature
                         ? featureType === 'sinalizacao_horizontal_marca_viaria'
                           ? 'Coluna Resultado não encontrada nesta aba'
                           : 'Coluna Resultado Geral não encontrada nesta aba'
@@ -1222,6 +1257,17 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full sm:w-auto shrink-0">
           <button
             type="button"
+            onClick={onBackToUpload}
+            disabled={isProcessing}
+            className="px-4 py-3 rounded-xl border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs sm:text-sm transition-all shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+            title="Voltar para a Etapa 1 e enviar uma nova planilha"
+          >
+            <ArrowLeft className="w-4 h-4 text-slate-500" />
+            <span>Voltar para Etapa 1</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setIsTurboModeOpen(true)}
             disabled={isProcessing}
             className="px-5 py-3 rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-emerald-600 hover:from-amber-600 hover:to-emerald-700 text-white font-extrabold text-xs sm:text-sm transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 active:scale-98"
@@ -1263,11 +1309,13 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
         fileId={uploadData.fileId}
         originalFileName={uploadData.originalName}
         sheetName={activeSheet}
+        sheetNames={uploadData.sheetNames}
         featureType={featureType}
         allColumns={sheetDetails.columns}
         availableRodovias={availableRodovias}
         rowFiltersData={sheetDetails.rowFiltersData}
         totalRows={sheetDetails.totalRows}
+        onBackToUpload={onBackToUpload}
       />
     </div>
   );

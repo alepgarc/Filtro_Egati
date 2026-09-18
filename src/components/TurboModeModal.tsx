@@ -18,12 +18,13 @@ import {
   Sparkles,
   ExternalLink,
 } from 'lucide-react';
-import { DrainageFeatureType, ColumnInfo, RowFilterItem } from '../types';
+import { DrainageFeatureType, ColumnInfo, RowFilterItem, SheetDetails } from '../types';
 import {
   DRAINAGE_FEATURES,
   isDefaultPresetField,
   normalizeColKey,
   matchesEstadoFilterFrontend,
+  normalizeRodoviaForFeature,
 } from '../constants/presets';
 
 interface TurboModeModalProps {
@@ -32,15 +33,19 @@ interface TurboModeModalProps {
   fileId: string;
   originalFileName: string;
   sheetName: string;
+  sheetNames?: string[];
   featureType: DrainageFeatureType;
   allColumns: ColumnInfo[];
   availableRodovias: string[];
   rowFiltersData?: RowFilterItem[];
   totalRows: number;
+  onBackToUpload?: () => void;
 }
 
 interface RodoviaProcessItem {
+  id: string;
   rodovia: string;
+  tabName?: string;
   precaroCount: number;
   totalCount: number;
   selected: boolean;
@@ -61,60 +66,96 @@ async function saveBlobWithPicker(
   suggestedName: string,
   mimeType: string
 ): Promise<boolean> {
-  try {
-    const response = await fetch(downloadUrl);
-    if (!response.ok) {
-      throw new Error(`Falha ao baixar arquivo: ${response.statusText}`);
-    }
-    const blob = await response.blob();
+  let lastErr: any = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await fetch(downloadUrl);
+      const contentType = response.headers.get('content-type') || '';
 
-    // 1. Try modern File System Access API (showSaveFilePicker) if supported in current browser & context
-    if ('showSaveFilePicker' in window && window.self === window.top) {
-      try {
-        const isPdf = suggestedName.toLowerCase().endsWith('.pdf');
-        const handle = await (window as any).showSaveFilePicker({
-          suggestedName,
-          types: [
-            {
-              description: isPdf ? 'Documento PDF' : 'Planilha Microsoft Excel',
-              accept: {
-                [mimeType]: [isPdf ? '.pdf' : '.xlsx'],
-              },
-            },
-          ],
-        });
-        const writable = await handle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        return true;
-      } catch (pickerErr: any) {
-        if (pickerErr.name === 'AbortError') {
-          // User deliberately cancelled the file picker dialog
-          console.log('Salvar arquivo cancelado pelo usuário no diálogo.');
-          return false;
+      if (!response.ok || contentType.includes('text/html')) {
+        let errText = '';
+        try {
+          errText = await response.text();
+        } catch {}
+
+        let serverMsg = '';
+        if (errText) {
+          try {
+            const parsedJson = JSON.parse(errText);
+            serverMsg = parsedJson.error || parsedJson.message || '';
+          } catch {
+            if (!errText.includes('<!doctype') && !errText.includes('<html')) {
+              serverMsg = errText.trim();
+            }
+          }
         }
-        // Fallback to standard download if picker is blocked (e.g. inside iframe)
+
+        if (serverMsg) {
+          throw new Error(serverMsg);
+        }
+
+        if (contentType.includes('text/html') || errText.includes('<!doctype') || errText.includes('<html')) {
+          throw new Error(`HTTP ${response.status}: Resposta inválida do servidor (HTML em vez de arquivo binário).`);
+        }
+        throw new Error(errText || `HTTP ${response.status}: ${response.statusText}`);
+      }
+      const blob = await response.blob();
+      if (!blob || blob.size < 100) {
+        throw new Error(`Arquivo recebido inválido ou muito pequeno (${blob?.size || 0} bytes).`);
+      }
+
+      // 1. Try modern File System Access API (showSaveFilePicker) if supported in current browser & context
+      if ('showSaveFilePicker' in window && window.self === window.top) {
+        try {
+          const isPdf = suggestedName.toLowerCase().endsWith('.pdf');
+          const handle = await (window as any).showSaveFilePicker({
+            suggestedName,
+            types: [
+              {
+                description: isPdf ? 'Documento PDF' : 'Planilha Microsoft Excel',
+                accept: {
+                  [mimeType]: [isPdf ? '.pdf' : '.xlsx'],
+                },
+              },
+            ],
+          });
+          const writable = await handle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          return true;
+        } catch (pickerErr: any) {
+          if (pickerErr.name === 'AbortError') {
+            console.log('Salvar arquivo cancelado pelo usuário no diálogo.');
+            return false;
+          }
+          // Fallback to standard download if picker is blocked
+        }
+      }
+
+      // 2. Standard browser anchor download
+      const blobUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = blobUrl;
+      anchor.download = suggestedName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+      }, 10000);
+
+      return true;
+    } catch (err: any) {
+      lastErr = err;
+      if (attempt < 3) {
+        await new Promise((r) => setTimeout(r, 1000));
       }
     }
-
-    // 2. Standard browser anchor download
-    const blobUrl = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = blobUrl;
-    anchor.download = suggestedName;
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-
-    setTimeout(() => {
-      URL.revokeObjectURL(blobUrl);
-    }, 10000);
-
-    return true;
-  } catch (err) {
-    console.error('Erro ao salvar arquivo no Modo Turbo:', err);
-    throw err;
   }
+
+  console.error(`Erro ao salvar arquivo ${suggestedName} no Modo Turbo:`, lastErr);
+  throw lastErr || new Error(`Falha ao salvar ${suggestedName}`);
 }
 
 export const TurboModeModal: React.FC<TurboModeModalProps> = ({
@@ -123,33 +164,130 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
   fileId,
   originalFileName,
   sheetName,
+  sheetNames,
   featureType,
   allColumns,
   availableRodovias,
   rowFiltersData,
   totalRows,
+  onBackToUpload,
 }) => {
   const isReprovadoFeature =
     featureType === 'sinalizacao_vertical' ||
     featureType === 'sinalizacao_horizontal_dispositivo' ||
     featureType === 'sinalizacao_horizontal_marca_viaria' ||
     featureType === 'sinalizacao_horizontal_zebrado';
-  const defaultFilterValue = isReprovadoFeature ? 'Reprovado' : 'PRECÁRIO';
+  const defaultFilterValue =
+    featureType === 'eps_defensa' ? 'Ruim' : isReprovadoFeature ? 'Reprovado' : 'PRECÁRIO';
 
   const [items, setItems] = useState<RodoviaProcessItem[]>([]);
   const [selectedEstadoFilter, setSelectedEstadoFilter] = useState<string>(defaultFilterValue);
+
+  // Synchronize filter when modal opens or featureType changes
+  useEffect(() => {
+    if (isOpen) {
+      setSelectedEstadoFilter(defaultFilterValue);
+    }
+  }, [isOpen, featureType, defaultFilterValue]);
   const [isRunning, setIsRunning] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
   const [currentProcessingIndex, setCurrentProcessingIndex] = useState<number>(-1);
   const [currentStepText, setCurrentStepText] = useState<string>('');
   const [overallError, setOverallError] = useState<string | null>(null);
+  const [tabsData, setTabsData] = useState<Record<string, SheetDetails>>({});
+  const [isLoadingTabs, setIsLoadingTabs] = useState<boolean>(false);
 
   const abortControllerRef = useRef<boolean>(false);
 
   const featureConfig = DRAINAGE_FEATURES[featureType];
 
+  // For EPS-Defensa, target the 3 specific tabs
+  const targetSheets = React.useMemo(() => {
+    if (featureType === 'eps_defensa') {
+      const expected = ['Barreira de Concreto', 'Defensa Metalica', 'Defensa OAE'];
+      if (sheetNames && sheetNames.length > 0) {
+        const matched = sheetNames.filter((sn) => {
+          const normSn = normalizeColKey(sn);
+          return expected.some((exp) => {
+            const normExp = normalizeColKey(exp);
+            return (
+              normSn === normExp ||
+              normSn.includes(normExp) ||
+              normExp.includes(normSn) ||
+              normSn.replace(/s$/g, '') === normExp.replace(/s$/g, '')
+            );
+          });
+        });
+        return matched.length > 0 ? matched : sheetNames;
+      }
+      return expected;
+    }
+    return [sheetName];
+  }, [featureType, sheetNames, sheetName]);
+
+  // Fetch details for all tabs when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let isMounted = true;
+    const loadTabs = async () => {
+      setIsLoadingTabs(true);
+      const newTabsData: Record<string, SheetDetails> = {};
+
+      // Seed current active tab
+      if (sheetName) {
+        newTabsData[sheetName] = {
+          headers: [],
+          columns: allColumns,
+          totalRows,
+          totalCols: allColumns.length,
+          previewRows: [],
+          rodoviaOptions: availableRodovias,
+          rowFiltersData: rowFiltersData || [],
+        };
+      }
+
+      // Fetch other target sheets if multi-tab
+      const missingSheets = targetSheets.filter((tab) => tab !== sheetName);
+      if (missingSheets.length > 0) {
+        await Promise.all(
+          missingSheets.map(async (tab) => {
+            try {
+              const res = await fetch(
+                `/api/sheet-details/${fileId}/${encodeURIComponent(tab)}?featureType=${featureType}`
+              );
+              if (res.ok) {
+                const text = await res.text();
+                const json = JSON.parse(text);
+                const details: SheetDetails = json.sheetDetails || json;
+                newTabsData[tab] = details;
+              }
+            } catch (err) {
+              console.warn(`Could not load details for tab ${tab}:`, err);
+            }
+          })
+        );
+      }
+
+      if (isMounted) {
+        setTabsData((prev) => ({ ...prev, ...newTabsData }));
+        setIsLoadingTabs(false);
+      }
+    };
+
+    loadTabs();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, fileId, sheetName, targetSheets, featureType, allColumns, availableRodovias, rowFiltersData, totalRows]);
+
   // Extract all unique non-empty status values from rowFiltersData
   const availableStatusOptions = React.useMemo(() => {
+    if (featureType === 'eps_defensa') {
+      return ['Ruim', 'Regular', 'Boa', 'Todos'];
+    }
+
     const seenNorm = new Set<string>();
     const uniqueOptions: string[] = [];
 
@@ -173,9 +311,9 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
 
     addOption('Todos');
     return uniqueOptions;
-  }, [rowFiltersData, defaultFilterValue]);
+  }, [rowFiltersData, defaultFilterValue, featureType]);
 
-  // Initialize and update items when modal opens or inputs/filters change
+  // Initialize and update items when modal opens, tabs load, or inputs/filters change
   useEffect(() => {
     if (!isOpen) return;
 
@@ -186,54 +324,111 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
     setCurrentStepText('');
     setOverallError(null);
 
-    const targetFilterNorm = normalizeColKey(selectedEstadoFilter);
-    const isTodos = selectedEstadoFilter.toUpperCase() === 'TODOS';
-
     const list: RodoviaProcessItem[] = [];
 
-    if (availableRodovias.length > 0) {
-      availableRodovias.forEach((rod) => {
-        let precaroCount = 0;
-        let totalCount = 0;
-
-        if (rowFiltersData && rowFiltersData.length > 0) {
-          rowFiltersData.forEach((row) => {
-            if (normalizeColKey(row.r) === normalizeColKey(rod)) {
-              totalCount++;
-              if (matchesEstadoFilterFrontend(row.e, selectedEstadoFilter)) {
-                precaroCount++;
-              }
+    targetSheets.forEach((tab) => {
+      const tabInfo =
+        tabsData[tab] ||
+        (tab === sheetName
+          ? {
+              columns: allColumns,
+              rodoviaOptions: availableRodovias,
+              rowFiltersData: rowFiltersData || [],
+              totalRows,
             }
+          : null);
+
+      const rawTabRodovias = tabInfo?.rodoviaOptions || (tab === sheetName ? availableRodovias : []);
+      const tabRowsData = tabInfo?.rowFiltersData || (tab === sheetName ? rowFiltersData || [] : []);
+      const tabTotalRows = tabInfo?.totalRows ?? (tab === sheetName ? totalRows : 0);
+
+      // Normalize rodovias (e.g. for EPS - Defensa, "BR/376 CN", "BR/376 TU", "BR-376 PR" coalesce to "BR/376")
+      const normalizedRodoviaSet = new Set<string>();
+      rawTabRodovias.forEach((r) => {
+        if (r && r.trim()) {
+          normalizedRodoviaSet.add(normalizeRodoviaForFeature(r, featureType));
+        }
+      });
+      const tabRodovias = Array.from(normalizedRodoviaSet);
+
+      if (tabRodovias.length > 0) {
+        tabRodovias.forEach((rod) => {
+          let precaroCount = 0;
+          let totalCount = 0;
+
+          if (tabRowsData.length > 0) {
+            tabRowsData.forEach((row) => {
+              const rowRodNorm = normalizeRodoviaForFeature(row.r, featureType);
+              if (
+                normalizeColKey(rowRodNorm) === normalizeColKey(rod) ||
+                rowRodNorm === rod ||
+                normalizeColKey(row.r) === normalizeColKey(rod)
+              ) {
+                totalCount++;
+                if (matchesEstadoFilterFrontend(row.e, selectedEstadoFilter)) {
+                  precaroCount++;
+                }
+              }
+            });
+          }
+
+          const isSelected =
+            selectedEstadoFilter.toLowerCase() === 'todos'
+              ? totalCount > 0
+              : tabRowsData.length > 0
+              ? precaroCount > 0
+              : true;
+
+          list.push({
+            id: `${tab}__${rod}`,
+            rodovia: rod,
+            tabName: tab,
+            precaroCount,
+            totalCount,
+            selected: isSelected,
+            status: 'idle',
           });
+        });
+      } else {
+        let precaroCount = 0;
+        if (tabRowsData.length > 0) {
+          precaroCount = tabRowsData.filter((r) => {
+            return matchesEstadoFilterFrontend(r.e, selectedEstadoFilter);
+          }).length;
         }
 
+        const isSelected =
+          selectedEstadoFilter.toLowerCase() === 'todos'
+            ? true
+            : tabRowsData.length > 0
+            ? precaroCount > 0
+            : true;
+
         list.push({
-          rodovia: rod,
+          id: `${tab}__geral`,
+          rodovia: 'Todas as Rodovias (Geral)',
+          tabName: tab,
           precaroCount,
-          totalCount,
-          // Select by default if it has target filter records, or if no rowFiltersData is available
-          selected: rowFiltersData && rowFiltersData.length > 0 ? precaroCount > 0 : true,
+          totalCount: tabTotalRows,
+          selected: isSelected,
           status: 'idle',
         });
-      });
-    } else {
-      let precaroCount = 0;
-      if (rowFiltersData && rowFiltersData.length > 0) {
-        precaroCount = rowFiltersData.filter((r) => {
-          return matchesEstadoFilterFrontend(r.e, selectedEstadoFilter);
-        }).length;
       }
-      list.push({
-        rodovia: 'Todas as Rodovias (Geral)',
-        precaroCount,
-        totalCount: totalRows,
-        selected: true,
-        status: 'idle',
-      });
-    }
+    });
 
     setItems(list);
-  }, [isOpen, availableRodovias, rowFiltersData, totalRows, featureType, selectedEstadoFilter]);
+  }, [
+    isOpen,
+    tabsData,
+    availableRodovias,
+    rowFiltersData,
+    totalRows,
+    featureType,
+    selectedEstadoFilter,
+    targetSheets,
+    sheetName,
+    allColumns,
+  ]);
 
   if (!isOpen) return null;
 
@@ -250,10 +445,10 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
   const completedCount = items.filter((it) => it.status === 'completed').length;
   const totalSelectedCount = selectedItems.length;
 
-  const toggleSelect = (rodovia: string) => {
+  const toggleSelect = (id: string) => {
     if (isRunning) return;
     setItems((prev) =>
-      prev.map((it) => (it.rodovia === rodovia ? { ...it, selected: !it.selected } : it))
+      prev.map((it) => (it.id === id ? { ...it, selected: !it.selected } : it))
     );
   };
 
@@ -285,6 +480,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
     setOverallError(null);
 
     const itemsToProcess = items.filter((it) => it.selected);
+    const tabColsToRemoveCache = new Map<string, number[]>();
 
     for (let i = 0; i < itemsToProcess.length; i++) {
       if (abortControllerRef.current) {
@@ -292,43 +488,124 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
       }
 
       const item = itemsToProcess[i];
-      const actualIndex = items.findIndex((it) => it.rodovia === item.rodovia);
+      const actualIndex = items.findIndex((it) => it.id === item.id);
       setCurrentProcessingIndex(actualIndex);
+
+      const targetTab = item.tabName || sheetName;
+      let colsToRemove: number[];
+      if (tabColsToRemoveCache.has(targetTab)) {
+        colsToRemove = tabColsToRemoveCache.get(targetTab)!;
+      } else if (tabsData[targetTab]?.columns && tabsData[targetTab].columns.length > 0) {
+        const cols = tabsData[targetTab].columns;
+        const keepCols = cols
+          .filter((c: any) => isDefaultPresetField(c.name, featureType))
+          .map((c: any) => c.index);
+        colsToRemove =
+          keepCols.length > 0
+            ? cols.filter((c: any) => !keepCols.includes(c.index)).map((c: any) => c.index)
+            : [];
+        tabColsToRemoveCache.set(targetTab, colsToRemove);
+      } else if (targetTab === sheetName) {
+        colsToRemove = columnIndicesToRemove;
+        tabColsToRemoveCache.set(targetTab, colsToRemove);
+      } else {
+        try {
+          const tabDetailsRes = await fetch(
+            `/api/sheet-details/${fileId}/${encodeURIComponent(targetTab)}?featureType=${featureType}`
+          );
+          if (tabDetailsRes.ok) {
+            const tabText = await tabDetailsRes.text();
+            try {
+              const tabDetails = JSON.parse(tabText);
+              const cols = tabDetails.sheetDetails?.columns || tabDetails.columns || [];
+              const keepCols = cols
+                .filter((c: any) => isDefaultPresetField(c.name, featureType))
+                .map((c: any) => c.index);
+              colsToRemove =
+                keepCols.length > 0
+                  ? cols
+                      .filter((c: any) => !keepCols.includes(c.index))
+                      .map((c: any) => c.index)
+                  : [];
+            } catch {
+              colsToRemove = columnIndicesToRemove;
+            }
+          } else {
+            colsToRemove = columnIndicesToRemove;
+          }
+        } catch {
+          colsToRemove = columnIndicesToRemove;
+        }
+        tabColsToRemoveCache.set(targetTab, colsToRemove);
+      }
 
       const rodoviaFilterParam =
         item.rodovia === 'Todas as Rodovias (Geral)' ? null : item.rodovia;
 
       try {
-        // Step 1: Generate processed XLSX via backend
+        const tabDesc = item.tabName ? `[${item.tabName}] ` : '';
+        // Step 1: Generate processed XLSX via backend with retry
         setCurrentStepText(
-          `[${i + 1}/${itemsToProcess.length}] Gerando planilha XLSX para ${item.rodovia}...`
+          `[${i + 1}/${itemsToProcess.length}] Gerando planilha XLSX para ${tabDesc}${item.rodovia}...`
         );
 
         setItems((prev) =>
-          prev.map((it, idx) =>
-            idx === actualIndex ? { ...it, status: 'processing-xlsx', errorMessage: undefined } : it
+          prev.map((it) =>
+            it.id === item.id ? { ...it, status: 'processing-xlsx', errorMessage: undefined } : it
           )
         );
 
-        const processRes = await fetch('/api/process', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fileId,
-            sheetName,
-            columnIndicesToRemove,
-            estadoConservacaoFilter: selectedEstadoFilter,
-            rodoviaFilter: rodoviaFilterParam,
-            featureType,
-          }),
-        });
+        let processResult: any = null;
+        let processErr: any = null;
 
-        if (!processRes.ok) {
-          const errData = await processRes.json();
-          throw new Error(errData.error || 'Erro ao processar planilha.');
+        for (let pAttempt = 1; pAttempt <= 3; pAttempt++) {
+          try {
+            const processRes = await fetch('/api/process', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                fileId,
+                sheetName: targetTab,
+                columnIndicesToRemove: colsToRemove,
+                estadoConservacaoFilter: selectedEstadoFilter,
+                rodoviaFilter: rodoviaFilterParam,
+                featureType,
+              }),
+            });
+
+            const text = await processRes.text();
+
+            if (!processRes.ok) {
+              let errMsg = `HTTP ${processRes.status}`;
+              try {
+                const errData = JSON.parse(text);
+                errMsg = errData.error || errMsg;
+              } catch {
+                if (text && !text.includes('<!doctype') && !text.includes('<html')) {
+                  errMsg = text.trim();
+                }
+              }
+              throw new Error(errMsg);
+            }
+
+            try {
+              processResult = JSON.parse(text);
+            } catch {
+              throw new Error(`Resposta inválida do servidor ao processar ${item.rodovia}: ${text.slice(0, 120)}`);
+            }
+            break;
+          } catch (e: any) {
+            processErr = e;
+            if (pAttempt < 3 && !abortControllerRef.current) {
+              await new Promise((r) => setTimeout(r, 1200));
+            }
+          }
         }
 
-        const processResult = await processRes.json();
+        if (!processResult) {
+          throw processErr || new Error('Erro ao processar planilha.');
+        }
+
         const downloadId = processResult.downloadId;
         const xlsxFileName = processResult.fileName;
         const xlsxDownloadUrl = processResult.downloadUrl;
@@ -340,8 +617,8 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
 
         // Update item with download URLs
         setItems((prev) =>
-          prev.map((it, idx) =>
-            idx === actualIndex
+          prev.map((it) =>
+            it.id === item.id
               ? {
                   ...it,
                   downloadId,
@@ -376,7 +653,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
           `[${i + 1}/${itemsToProcess.length}] Gerando e salvando relatório PDF (${pdfFileName})...`
         );
         setItems((prev) =>
-          prev.map((it, idx) => (idx === actualIndex ? { ...it, status: 'processing-pdf' } : it))
+          prev.map((it) => (it.id === item.id ? { ...it, status: 'processing-pdf' } : it))
         );
 
         await saveBlobWithPicker(pdfDownloadUrl, pdfFileName, 'application/pdf');
@@ -384,15 +661,15 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
         // Pause briefly before next rodovia
         await new Promise((resolve) => setTimeout(resolve, 600));
 
-        // Mark this rodovia as completed
+        // Mark this item as completed
         setItems((prev) =>
-          prev.map((it, idx) => (idx === actualIndex ? { ...it, status: 'completed' } : it))
+          prev.map((it) => (it.id === item.id ? { ...it, status: 'completed' } : it))
         );
       } catch (err: any) {
-        console.error(`Erro ao processar rodovia ${item.rodovia}:`, err);
+        console.error(`Erro ao processar ${item.rodovia}:`, err);
         setItems((prev) =>
-          prev.map((it, idx) =>
-            idx === actualIndex
+          prev.map((it) =>
+            it.id === item.id
               ? { ...it, status: 'error', errorMessage: err.message || 'Falha no processamento' }
               : it
           )
@@ -581,7 +858,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                 const isCurrent = currentProcessingIndex === index;
                 return (
                   <div
-                    key={item.rodovia}
+                    key={item.id}
                     className={`p-3 flex items-center justify-between gap-3 transition-colors ${
                       isCurrent
                         ? 'bg-amber-50/80 ring-1 ring-amber-300'
@@ -600,19 +877,28 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                       <input
                         type="checkbox"
                         checked={item.selected}
-                        onChange={() => toggleSelect(item.rodovia)}
+                        onChange={() => toggleSelect(item.id)}
                         disabled={isRunning}
                         className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer accent-emerald-600"
                       />
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
+                          {item.tabName && (
+                            <span className="text-[10px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200 px-1.5 py-0.5 rounded-md">
+                              {item.tabName}
+                            </span>
+                          )}
                           <span className="text-xs font-bold text-slate-900">
                             {item.rodovia}
                           </span>
                           {item.precaroCount > 0 ? (
                             <span className="text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 px-1.5 py-0.2 rounded-md">
                               {item.precaroCount}{' '}
-                              {featureType === 'sinalizacao_vertical'
+                              {featureType === 'eps_defensa'
+                                ? item.precaroCount === 1
+                                  ? 'registro RUIM'
+                                  : 'registros RUINS'
+                                : featureType === 'sinalizacao_vertical'
                                 ? item.precaroCount === 1
                                   ? 'registro REPROVADO'
                                   : 'registros REPROVADOS'
@@ -622,7 +908,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                             </span>
                           ) : (
                             <span className="text-[10px] font-medium bg-slate-100 text-slate-500 px-1.5 py-0.2 rounded-md">
-                              0 {featureType === 'sinalizacao_vertical' ? 'reprovados' : 'precários'} ({item.totalCount} total)
+                              0 {featureType === 'eps_defensa' ? 'ruins' : featureType === 'sinalizacao_vertical' ? 'reprovados' : 'precários'} ({item.totalCount} total)
                             </span>
                           )}
                         </div>
@@ -733,6 +1019,21 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
               </button>
             ) : (
               <>
+                {isFinished && onBackToUpload && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onBackToUpload();
+                    }}
+                    className="px-4 py-2.5 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 font-bold text-xs transition-colors cursor-pointer flex items-center gap-1.5"
+                    title="Concluir e voltar para a Etapa 1 para enviar outra planilha"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-emerald-700" />
+                    <span>Voltar para Etapa 1</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={onClose}

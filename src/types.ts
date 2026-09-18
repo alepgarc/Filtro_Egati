@@ -4,7 +4,8 @@ export type DrainageFeatureType =
   | 'sinalizacao_vertical'
   | 'sinalizacao_horizontal_dispositivo'
   | 'sinalizacao_horizontal_marca_viaria'
-  | 'sinalizacao_horizontal_zebrado';
+  | 'sinalizacao_horizontal_zebrado'
+  | 'eps_defensa';
 
 export interface ColumnInfo {
   index: number;
