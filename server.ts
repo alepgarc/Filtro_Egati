@@ -3496,9 +3496,8 @@ app.get('/api/download-pdf/:downloadId', async (req, res) => {
           filterText += ` • ${filterColLabel}: ${processedInfo.appliedEstadoFilter}`;
         }
 
-        const photosCountStr = hasAnyImages ? ` • Fotos 1 a 4 incorporadas` : '';
         const countDisplay = dataRows[0]?.[0]?.includes('Nenhum registro') ? 0 : dataRows.length;
-        const subtitle = `Arquivo: ${processedInfo.originalFileName} • Total: ${countDisplay.toLocaleString('pt-BR')} registros • ${colCount} colunas no PDF${filterText}${photosCountStr}`;
+        const subtitle = `Arquivo: ${processedInfo.originalFileName} • Total: ${countDisplay.toLocaleString('pt-BR')} registros${filterText}`;
         doc.text(subtitle, 23.5, 13.5);
 
         doc.setDrawColor(103, 186, 123);

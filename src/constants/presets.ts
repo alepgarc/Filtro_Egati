@@ -304,14 +304,25 @@ export const isDefaultPresetField = (
   const norm = normalizeColKey(trimmed);
   if (normSet.has(norm)) return true;
 
-  // Universal photo column matching (Foto 1 to Foto 15, Imagem 1, etc.)
-  if (
-    /^foto\d+$/.test(norm) ||
-    /^foto_\d+$/.test(norm) ||
-    /^imagem\d+$/.test(norm) ||
-    /^img\d+$/.test(norm)
-  ) {
-    return true;
+  // Universal photo column matching with strict count per feature
+  const photoMatch = norm.match(/^(?:foto|imagem|img)_?(\d+)$/);
+  if (photoMatch) {
+    const photoNum = parseInt(photoMatch[1], 10);
+    if (feature === 'eps_defensa') {
+      return photoNum >= 1 && photoNum <= 4;
+    }
+    if (feature === 'sinalizacao_vertical') {
+      return photoNum >= 1 && photoNum <= 7;
+    }
+    if (
+      feature === 'sinalizacao_horizontal_dispositivo' ||
+      feature === 'sinalizacao_horizontal_marca_viaria' ||
+      feature === 'sinalizacao_horizontal_zebrado'
+    ) {
+      return photoNum >= 1 && photoNum <= 5;
+    }
+    // drenagem_profunda, drenagem_superficial
+    return photoNum >= 1 && photoNum <= 15;
   }
 
   if (feature === 'drenagem_profunda') {
@@ -448,12 +459,7 @@ export const isDefaultPresetField = (
     if (
       norm === 'aparenciageral' ||
       norm === 'aparencia_geral' ||
-      norm === 'aparencia' ||
-      norm === 'estadoconservacao' ||
-      norm === 'estado_conservacao' ||
-      norm === 'estado' ||
-      norm === 'situacao' ||
-      norm === 'condicao'
+      norm === 'aparencia'
     ) {
       return true;
     }
