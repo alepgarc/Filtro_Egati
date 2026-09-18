@@ -13,7 +13,8 @@ export const DRENAGEM_PROFUNDA_FIELDS = [
   'km',
   'Rodovia',
   'Sentido',
-  'repararEntorno',
+  'TipoMontante',
+  'sigla',
   'Limpeza.',
   'CaixaDanificada.',
   'TampaDanificada/Inxistente',
@@ -33,6 +34,23 @@ export const DRENAGEM_PROFUNDA_FIELDS = [
   'Foto13',
   'Foto14',
   'Foto15',
+] as const;
+
+export const DRENAGEM_PROFUNDA_TURBO_FIELDS = [
+  'codAuto',
+  'km',
+  'Rodovia',
+  'Sentido',
+  'TipoMontante',
+  'sigla',
+  'Limpeza.',
+  'CaixaDanificada.',
+  'TampaDanificada/Inxistente',
+  'EstadoConservacao',
+  'Foto1',
+  'Foto2',
+  'Foto3',
+  'Foto4',
 ] as const;
 
 export const DRENAGEM_SUPERFICIAL_FIELDS = [
@@ -59,6 +77,21 @@ export const DRENAGEM_SUPERFICIAL_FIELDS = [
   'Foto13',
   'Foto14',
   'Foto15',
+] as const;
+
+export const DRENAGEM_SUPERFICIAL_TURBO_FIELDS = [
+  'codAuto',
+  'Elemento',
+  'km',
+  'Rodovia',
+  'Sentido',
+  'ExtensaoReparar',
+  'ExtensaoLimpeza',
+  'EstadoConservacao',
+  'Foto1',
+  'Foto2',
+  'Foto3',
+  'Foto4',
 ] as const;
 
 export const SINALIZACAO_VERTICAL_FIELDS = [
@@ -164,7 +197,7 @@ export const DRAINAGE_FEATURES: Record<DrainageFeatureType, DrainageFeatureConfi
     name: 'Drenagem Profunda',
     tagline: 'Subterrânea / Caixas, Poços e Tampas',
     description:
-      'Mantém colunas de caixas, tampas, reparo de entorno, limpeza, estado de conservação e fotos.',
+      'Mantém colunas de sigla, tipo montante, caixas, tampas, limpeza, estado de conservação e fotos.',
     fields: DRENAGEM_PROFUNDA_FIELDS,
   },
   drenagem_superficial: {
@@ -229,8 +262,16 @@ const profundaNormSet = new Set(
   DRENAGEM_PROFUNDA_FIELDS.map((f) => normalizeColKey(f))
 );
 
+const profundaTurboNormSet = new Set(
+  DRENAGEM_PROFUNDA_TURBO_FIELDS.map((f) => normalizeColKey(f))
+);
+
 const superficialNormSet = new Set(
   DRENAGEM_SUPERFICIAL_FIELDS.map((f) => normalizeColKey(f))
+);
+
+const superficialTurboNormSet = new Set(
+  DRENAGEM_SUPERFICIAL_TURBO_FIELDS.map((f) => normalizeColKey(f))
 );
 
 const sinalizacaoVerticalNormSet = new Set(
@@ -255,7 +296,8 @@ const epsDefensaNormSet = new Set(
 
 export const isDefaultPresetField = (
   columnName: string,
-  feature: DrainageFeatureType = 'drenagem_profunda'
+  feature: DrainageFeatureType = 'drenagem_profunda',
+  isTurbo: boolean = false
 ): boolean => {
   if (!columnName) return false;
   const trimmed = columnName.trim();
@@ -263,36 +305,70 @@ export const isDefaultPresetField = (
   let fields: readonly string[];
   let normSet: Set<string>;
 
-  switch (feature) {
-    case 'eps_defensa':
-      fields = EPS_DEFENSA_FIELDS;
-      normSet = epsDefensaNormSet;
-      break;
-    case 'sinalizacao_vertical':
-      fields = SINALIZACAO_VERTICAL_FIELDS;
-      normSet = sinalizacaoVerticalNormSet;
-      break;
-    case 'drenagem_superficial':
-      fields = DRENAGEM_SUPERFICIAL_FIELDS;
-      normSet = superficialNormSet;
-      break;
-    case 'sinalizacao_horizontal_dispositivo':
-      fields = SINALIZACAO_HORIZONTAL_DISPOSITIVO_FIELDS;
-      normSet = sinalizacaoHorizontalDispositivoNormSet;
-      break;
-    case 'sinalizacao_horizontal_marca_viaria':
-      fields = SINALIZACAO_HORIZONTAL_MARCA_VIARIA_FIELDS;
-      normSet = sinalizacaoHorizontalMarcaViariaNormSet;
-      break;
-    case 'sinalizacao_horizontal_zebrado':
-      fields = SINALIZACAO_HORIZONTAL_ZEBRADO_FIELDS;
-      normSet = sinalizacaoHorizontalZebradoNormSet;
-      break;
-    case 'drenagem_profunda':
-    default:
-      fields = DRENAGEM_PROFUNDA_FIELDS;
-      normSet = profundaNormSet;
-      break;
+  if (isTurbo) {
+    switch (feature) {
+      case 'eps_defensa':
+        fields = EPS_DEFENSA_FIELDS;
+        normSet = epsDefensaNormSet;
+        break;
+      case 'sinalizacao_vertical':
+        fields = SINALIZACAO_VERTICAL_FIELDS;
+        normSet = sinalizacaoVerticalNormSet;
+        break;
+      case 'drenagem_superficial':
+        fields = DRENAGEM_SUPERFICIAL_TURBO_FIELDS;
+        normSet = superficialTurboNormSet;
+        break;
+      case 'sinalizacao_horizontal_dispositivo':
+        fields = SINALIZACAO_HORIZONTAL_DISPOSITIVO_FIELDS;
+        normSet = sinalizacaoHorizontalDispositivoNormSet;
+        break;
+      case 'sinalizacao_horizontal_marca_viaria':
+        fields = SINALIZACAO_HORIZONTAL_MARCA_VIARIA_FIELDS;
+        normSet = sinalizacaoHorizontalMarcaViariaNormSet;
+        break;
+      case 'sinalizacao_horizontal_zebrado':
+        fields = SINALIZACAO_HORIZONTAL_ZEBRADO_FIELDS;
+        normSet = sinalizacaoHorizontalZebradoNormSet;
+        break;
+      case 'drenagem_profunda':
+      default:
+        fields = DRENAGEM_PROFUNDA_TURBO_FIELDS;
+        normSet = profundaTurboNormSet;
+        break;
+    }
+  } else {
+    switch (feature) {
+      case 'eps_defensa':
+        fields = EPS_DEFENSA_FIELDS;
+        normSet = epsDefensaNormSet;
+        break;
+      case 'sinalizacao_vertical':
+        fields = SINALIZACAO_VERTICAL_FIELDS;
+        normSet = sinalizacaoVerticalNormSet;
+        break;
+      case 'drenagem_superficial':
+        fields = DRENAGEM_SUPERFICIAL_FIELDS;
+        normSet = superficialNormSet;
+        break;
+      case 'sinalizacao_horizontal_dispositivo':
+        fields = SINALIZACAO_HORIZONTAL_DISPOSITIVO_FIELDS;
+        normSet = sinalizacaoHorizontalDispositivoNormSet;
+        break;
+      case 'sinalizacao_horizontal_marca_viaria':
+        fields = SINALIZACAO_HORIZONTAL_MARCA_VIARIA_FIELDS;
+        normSet = sinalizacaoHorizontalMarcaViariaNormSet;
+        break;
+      case 'sinalizacao_horizontal_zebrado':
+        fields = SINALIZACAO_HORIZONTAL_ZEBRADO_FIELDS;
+        normSet = sinalizacaoHorizontalZebradoNormSet;
+        break;
+      case 'drenagem_profunda':
+      default:
+        fields = DRENAGEM_PROFUNDA_FIELDS;
+        normSet = profundaNormSet;
+        break;
+    }
   }
 
   for (const field of fields) {
@@ -308,6 +384,27 @@ export const isDefaultPresetField = (
   const photoMatch = norm.match(/^(?:foto|imagem|img)_?(\d+)$/);
   if (photoMatch) {
     const photoNum = parseInt(photoMatch[1], 10);
+    if (isTurbo) {
+      if (
+        feature === 'eps_defensa' ||
+        feature === 'drenagem_profunda' ||
+        feature === 'drenagem_superficial'
+      ) {
+        return photoNum >= 1 && photoNum <= 4;
+      }
+      if (feature === 'sinalizacao_vertical') {
+        return photoNum >= 1 && photoNum <= 7;
+      }
+      if (
+        feature === 'sinalizacao_horizontal_dispositivo' ||
+        feature === 'sinalizacao_horizontal_marca_viaria' ||
+        feature === 'sinalizacao_horizontal_zebrado'
+      ) {
+        return photoNum >= 1 && photoNum <= 5;
+      }
+      return photoNum >= 1 && photoNum <= 4;
+    }
+
     if (feature === 'eps_defensa') {
       return photoNum >= 1 && photoNum <= 4;
     }
@@ -321,11 +418,27 @@ export const isDefaultPresetField = (
     ) {
       return photoNum >= 1 && photoNum <= 5;
     }
-    // drenagem_profunda, drenagem_superficial
+    // drenagem_profunda, drenagem_superficial (standard preset: 1 to 15)
     return photoNum >= 1 && photoNum <= 15;
   }
 
   if (feature === 'drenagem_profunda') {
+    if (
+      norm === 'sigla' ||
+      norm === 'siglaelemento' ||
+      norm === 'sigla_elemento' ||
+      norm === 'sigladrenagem'
+    ) {
+      return true;
+    }
+    if (
+      norm === 'tipomontante' ||
+      norm === 'tipo_montante' ||
+      norm === 'tipodemontante' ||
+      norm === 'montante'
+    ) {
+      return true;
+    }
     if (
       norm === 'tampadanificadainxistente' ||
       norm === 'tampadanificadainexistente' ||
@@ -336,10 +449,10 @@ export const isDefaultPresetField = (
     if (norm === 'sentido') {
       return true;
     }
-    if (norm === 'repararentorno') {
+    if (norm === 'caixadanificada') {
       return true;
     }
-    if (norm === 'caixadanificada') {
+    if (norm === 'limpeza' || norm === 'limpeza.') {
       return true;
     }
   } else if (feature === 'drenagem_superficial') {
@@ -361,7 +474,12 @@ export const isDefaultPresetField = (
     if (norm === 'sentido') {
       return true;
     }
-    if (norm === 'elemento') {
+    if (
+      norm === 'elemento' ||
+      norm === 'elementos' ||
+      norm === 'tipoelemento' ||
+      norm === 'tipo_elemento'
+    ) {
       return true;
     }
   } else if (feature === 'sinalizacao_vertical') {

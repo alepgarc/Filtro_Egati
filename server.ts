@@ -3360,6 +3360,8 @@ app.get('/api/download-pdf/:downloadId', async (req, res) => {
         const headerLower = col.header.toLowerCase().replace(/[\s_\-]/g, '');
         let colW = 15.0;
         if (headerLower === 'codauto') colW = 14.0;
+        else if (headerLower === 'sigla') colW = 12.0;
+        else if (headerLower.includes('montante')) colW = 16.0;
         else if (headerLower === 'km' || headerLower === 'kmfinal' || headerLower === 'kmfim') colW = 12.0;
         else if (headerLower === 'rodovia') colW = 15.0;
         else if (headerLower === 'sentido') colW = 12.0;
@@ -3737,7 +3739,8 @@ app.post('/api/generate-sample', async (req, res) => {
         'km',
         'Rodovia',
         'Sentido',
-        'repararEntorno',
+        'TipoMontante',
+        'sigla',
         'Limpeza.',
         'CaixaDanificada.',
         'TampaDanificada/Inxistente',

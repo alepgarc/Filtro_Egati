@@ -397,12 +397,12 @@ export const UploadStep: React.FC<UploadStepProps> = ({
               </div>
 
               <p className="text-xs text-slate-600 leading-relaxed mt-2">
-                Mantém: <span className="font-semibold text-slate-800">codAuto, km, Rodovia, Sentido, repararEntorno, Limpeza., CaixaDanificada., TampaDanificada/Inxistente, EstadoConservacao, Foto1 a Foto15</span>.
+                Mantém: <span className="font-semibold text-slate-800">codAuto, km, Rodovia, Sentido, TipoMontante, sigla, Limpeza., CaixaDanificada., TampaDanificada/Inxistente, EstadoConservacao, Foto1 a Foto15</span>.
               </p>
             </div>
 
             <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[11px]">
-              <span className="text-slate-500 font-medium">24 colunas mantidas</span>
+              <span className="text-slate-500 font-medium">25 colunas mantidas</span>
               {selectedFeature === 'drenagem_profunda' ? (
                 <span className="text-emerald-700 font-bold bg-emerald-100 px-2 py-0.5 rounded-full">
                   Selecionada

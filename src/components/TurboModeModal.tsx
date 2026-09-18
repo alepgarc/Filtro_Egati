@@ -434,7 +434,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
 
   // Preset fields matching
   const presetMatchingIndices = allColumns
-    .filter((col) => isDefaultPresetField(col.name, featureType))
+    .filter((col) => isDefaultPresetField(col.name, featureType, true))
     .map((col) => col.index);
 
   const columnIndicesToRemove = allColumns
@@ -498,7 +498,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
       } else if (tabsData[targetTab]?.columns && tabsData[targetTab].columns.length > 0) {
         const cols = tabsData[targetTab].columns;
         const keepCols = cols
-          .filter((c: any) => isDefaultPresetField(c.name, featureType))
+          .filter((c: any) => isDefaultPresetField(c.name, featureType, true))
           .map((c: any) => c.index);
         colsToRemove =
           keepCols.length > 0
@@ -519,7 +519,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
               const tabDetails = JSON.parse(tabText);
               const cols = tabDetails.sheetDetails?.columns || tabDetails.columns || [];
               const keepCols = cols
-                .filter((c: any) => isDefaultPresetField(c.name, featureType))
+                .filter((c: any) => isDefaultPresetField(c.name, featureType, true))
                 .map((c: any) => c.index);
               colsToRemove =
                 keepCols.length > 0

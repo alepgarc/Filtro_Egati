@@ -658,7 +658,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
                       ? 'codAuto, rodovia, sentido, km, posicao, localizacao, lado, codigoTipo, materialSuporte, largura, altura, metro2, foto1 a foto7, Situação Retrorrefletancia, ObservacaoPlacaDanificada'
                       : featureType === 'drenagem_superficial'
                       ? 'codAuto, Elemento, km, Rodovia, Sentido, ExtensaoReparar, ExtensaoLimpeza, EstadoConservacao, Foto1 a Foto15'
-                      : 'codAuto, km, Rodovia, Sentido, repararEntorno, Limpeza., CaixaDanificada., TampaDanificada/Inxistente, EstadoConservacao, Foto1 a Foto15'}
+                      : 'codAuto, km, Rodovia, Sentido, TipoMontante, sigla, Limpeza., CaixaDanificada., TampaDanificada/Inxistente, EstadoConservacao, Foto1 a Foto15'}
                   </span>
                 </p>
               </div>
