@@ -2,6 +2,7 @@ import React from 'react';
 import { ShieldCheck, RotateCcw } from 'lucide-react';
 import { EPR_PARANA_LOGO_BASE64 } from '../assets/logoEpr';
 import { Step } from '../types';
+import { APP_VERSION } from '../constants/version';
 
 interface HeaderProps {
   currentStep?: Step;
@@ -28,6 +29,9 @@ export const Header: React.FC<HeaderProps> = ({ currentStep, onReset }) => {
               </h1>
               <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
                 XLSX & PDF
+              </span>
+              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-300">
+                v{APP_VERSION}
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">

@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { UploadResponse, DrainageFeatureType } from '../types';
 import { DRAINAGE_FEATURES } from '../constants/presets';
+import { APP_VERSION } from '../constants/version';
 
 interface UploadStepProps {
   selectedFeature: DrainageFeatureType;
@@ -327,6 +328,9 @@ export const UploadStep: React.FC<UploadStepProps> = ({
               <h3 className="text-base font-bold text-slate-800">
                 Selecione a Feature de Processamento
               </h3>
+              <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200/80 shadow-2xs">
+                v{APP_VERSION}
+              </span>
             </div>
             <p className="text-xs text-slate-500 mt-1">
               Escolha a feature correspondente à sua planilha para configurar automaticamente os campos da Seleção Padrão.
@@ -890,6 +894,14 @@ export const UploadStep: React.FC<UploadStepProps> = ({
             O arquivo gerado é configurado para abrir diretamente posicionado na célula A1.
           </p>
         </div>
+      </div>
+
+      {/* Version Tag */}
+      <div className="flex items-center justify-between text-xs text-slate-400 px-1 pt-1">
+        <span>EPR Paraná • Padronização & Filtragem de Planilhas</span>
+        <span className="font-semibold text-slate-500 bg-slate-200/60 px-2 py-0.5 rounded text-[11px]">
+          Versão {APP_VERSION}
+        </span>
       </div>
     </div>
   );
