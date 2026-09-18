@@ -56,6 +56,8 @@ export interface ProcessResponse {
   appliedEstadoFilter?: string | null;
   appliedRodoviaFilter?: string | null;
   featureType?: DrainageFeatureType;
+  parcialNumber?: number | string;
+  pdfDownloadUrl?: string;
 }
 
 export type Step = 1 | 2 | 3;

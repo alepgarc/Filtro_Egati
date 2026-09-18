@@ -15,6 +15,7 @@ import { Step, UploadResponse, ProcessResponse, DrainageFeatureType } from './ty
 export default function App() {
   const [currentStep, setCurrentStep] = useState<Step>(1);
   const [selectedFeature, setSelectedFeature] = useState<DrainageFeatureType>('drenagem_profunda');
+  const [parcialNumber, setParcialNumber] = useState<string>('1');
   const [uploadData, setUploadData] = useState<UploadResponse | null>(null);
   const [processedResult, setProcessedResult] = useState<ProcessResponse | null>(null);
 
@@ -99,6 +100,8 @@ export default function App() {
                 <UploadStep
                   selectedFeature={selectedFeature}
                   onFeatureChange={setSelectedFeature}
+                  parcialNumber={parcialNumber}
+                  onParcialChange={setParcialNumber}
                   onUploadSuccess={handleUploadSuccess}
                 />
               </motion.div>
@@ -116,6 +119,8 @@ export default function App() {
                   uploadData={uploadData}
                   initialFeatureType={selectedFeature}
                   onFeatureChange={setSelectedFeature}
+                  parcialNumber={parcialNumber}
+                  onParcialChange={setParcialNumber}
                   onBackToUpload={handleBackToUpload}
                   onProcessComplete={handleProcessComplete}
                 />

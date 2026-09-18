@@ -115,7 +115,6 @@ export const SINALIZACAO_VERTICAL_FIELDS = [
   'foto6',
   'foto7',
   'Situação Retrorrefletancia',
-  'ObservacaoPlacaDanificada',
 ] as const;
 
 export const SINALIZACAO_HORIZONTAL_DISPOSITIVO_FIELDS = [
@@ -213,7 +212,7 @@ export const DRAINAGE_FEATURES: Record<DrainageFeatureType, DrainageFeatureConfi
     name: 'Sinalização Vertical',
     tagline: 'Placas / Suportes, Dimensões e Retrorrefletância',
     description:
-      'Mantém colunas de posição, localização, tipo, suporte, dimensões, fotos, situação de retrorrefletância e observação de placa danificada.',
+      'Mantém colunas de posição, localização, tipo, suporte, dimensões, fotos e situação de retrorrefletância.',
     fields: SINALIZACAO_VERTICAL_FIELDS,
   },
   sinalizacao_horizontal_dispositivo: {
@@ -488,13 +487,6 @@ export const isDefaultPresetField = (
       norm === 'situacaoderetrorrefletancia' ||
       norm === 'situacaoretrorefletancia' ||
       norm === 'retrorrefletancia'
-    ) {
-      return true;
-    }
-    if (
-      norm === 'observacaoplacadanificada' ||
-      norm === 'observacaoplacasdanificadas' ||
-      norm === 'placadanificada'
     ) {
       return true;
     }

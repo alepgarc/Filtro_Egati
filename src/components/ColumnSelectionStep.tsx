@@ -41,6 +41,7 @@ import {
   normalizeRodoviaForFeature,
 } from '../constants/presets';
 import { TurboModeModal } from './TurboModeModal';
+import { getAreaIdentifier } from '../utils/fileNaming';
 
 export const SINALIZACAO_RETRORREFLETANCIA_OPTIONS = [
   { value: '', label: 'Todas as linhas (Sem filtro)' },
@@ -65,6 +66,8 @@ interface ColumnSelectionStepProps {
   uploadData: UploadResponse;
   initialFeatureType?: DrainageFeatureType;
   onFeatureChange?: (feature: DrainageFeatureType) => void;
+  parcialNumber: string;
+  onParcialChange: (parcial: string) => void;
   onBackToUpload: () => void;
   onProcessComplete: (result: any) => void;
 }
@@ -73,6 +76,8 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
   uploadData,
   initialFeatureType = 'drenagem_profunda',
   onFeatureChange,
+  parcialNumber,
+  onParcialChange,
   onBackToUpload,
   onProcessComplete,
 }) => {
@@ -402,6 +407,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
           estadoConservacaoFilter: estadoFilter.trim() !== '' ? estadoFilter : null,
           rodoviaFilter: rodoviaFilter.trim() !== '' ? rodoviaFilter : null,
           featureType,
+          parcialNumber,
         }),
       });
 
@@ -477,6 +483,23 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
             <Zap className="w-3.5 h-3.5 fill-amber-300 text-amber-100 animate-pulse" />
             <span>Modo Turbo</span>
           </button>
+
+          {/* Parcial selector dropdown */}
+          <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs">
+            <span className="text-slate-500 font-semibold">Parcial:</span>
+            <select
+              id="select-parcial-step2"
+              value={parcialNumber}
+              onChange={(e) => onParcialChange(e.target.value)}
+              className="bg-transparent font-bold text-emerald-800 focus:outline-none cursor-pointer"
+            >
+              {Array.from({ length: 30 }, (_, i) => i + 1).map((n) => (
+                <option key={n} value={String(n)}>
+                  Parcial {n}
+                </option>
+              ))}
+            </select>
+          </div>
 
           {/* Feature selector dropdown in step 2 */}
           <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs">
@@ -1316,6 +1339,8 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
         rowFiltersData={sheetDetails.rowFiltersData}
         totalRows={sheetDetails.totalRows}
         onBackToUpload={onBackToUpload}
+        parcialNumber={parcialNumber}
+        onParcialChange={onParcialChange}
       />
     </div>
   );

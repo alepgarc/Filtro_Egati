@@ -26,6 +26,7 @@ import {
   matchesEstadoFilterFrontend,
   normalizeRodoviaForFeature,
 } from '../constants/presets';
+import { getAreaIdentifier } from '../utils/fileNaming';
 
 interface TurboModeModalProps {
   isOpen: boolean;
@@ -40,6 +41,8 @@ interface TurboModeModalProps {
   rowFiltersData?: RowFilterItem[];
   totalRows: number;
   onBackToUpload?: () => void;
+  parcialNumber?: string;
+  onParcialChange?: (parcial: string) => void;
 }
 
 interface RodoviaProcessItem {
@@ -171,7 +174,22 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
   rowFiltersData,
   totalRows,
   onBackToUpload,
+  parcialNumber = '1',
+  onParcialChange,
 }) => {
+  const [localParcial, setLocalParcial] = useState<string>(parcialNumber || '1');
+
+  useEffect(() => {
+    if (parcialNumber) {
+      setLocalParcial(parcialNumber);
+    }
+  }, [parcialNumber]);
+
+  const handleParcialSelect = (val: string) => {
+    setLocalParcial(val);
+    onParcialChange?.(val);
+  };
+
   const isReprovadoFeature =
     featureType === 'sinalizacao_vertical' ||
     featureType === 'sinalizacao_horizontal_dispositivo' ||
@@ -575,6 +593,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                     : null,
                 rodoviaFilter: rodoviaFilterParam,
                 featureType,
+                parcialNumber: localParcial,
               }),
             });
 
@@ -747,15 +766,39 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-md bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
+                    <CheckCircle2 className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="font-bold text-slate-800">Parcial</div>
+                    <div className="text-[11px] text-slate-500">Identificação</div>
+                  </div>
+                </div>
+                <select
+                  value={localParcial}
+                  onChange={(e) => handleParcialSelect(e.target.value)}
+                  disabled={isRunning}
+                  className="text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer disabled:opacity-50"
+                >
+                  {Array.from({ length: 30 }, (_, i) => i + 1).map((n) => (
+                    <option key={n} value={String(n)}>
+                      Parcial {n}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="bg-white p-2.5 rounded-lg border border-slate-200 flex items-center gap-2">
                 <div className="w-6 h-6 rounded-md bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
                   <CheckCircle2 className="w-4 h-4" />
                 </div>
                 <div>
-                  <div className="font-bold text-slate-800">Seleção Padrão Ativada</div>
+                  <div className="font-bold text-slate-800">Seleção Padrão</div>
                   <div className="text-[11px] text-slate-500">
-                    {presetMatchingIndices.length} colunas padronizadas mantidas
+                    {presetMatchingIndices.length} colunas mantidas
                   </div>
                 </div>
               </div>
@@ -768,7 +811,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                   <div>
                     <div className="font-bold text-slate-800">Sem Filtro de Estado</div>
                     <div className="text-[11px] text-slate-500">
-                      Processando todos os registros por rodovia
+                      Todos os registros por rodovia
                     </div>
                   </div>
                 </div>
@@ -780,10 +823,10 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                     </div>
                     <div>
                       <div className="font-bold text-slate-800">
-                        Filtro de Status ({featureConfig.name})
+                        Status
                       </div>
                       <div className="text-[11px] text-slate-500">
-                        Filtrar por resultado/situação
+                        Filtrar por situação
                       </div>
                     </div>
                   </div>
@@ -791,16 +834,27 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                     value={selectedEstadoFilter}
                     onChange={(e) => setSelectedEstadoFilter(e.target.value)}
                     disabled={isRunning}
-                    className="text-xs font-bold text-amber-900 bg-amber-50 border border-amber-300 rounded-lg px-2.5 py-1 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer disabled:opacity-50"
+                    className="text-xs font-bold text-amber-900 bg-amber-50 border border-amber-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer disabled:opacity-50"
                   >
                     {availableStatusOptions.map((opt) => (
                       <option key={opt} value={opt}>
-                        {opt === 'Todos' ? 'Todos os Registros' : opt}
+                        {opt === 'Todos' ? 'Todos' : opt}
                       </option>
                     ))}
                   </select>
                 </div>
               )}
+            </div>
+
+            {/* Standard Naming format preview */}
+            <div className="flex items-center justify-between flex-wrap gap-2 text-[11px] bg-white border border-slate-200/80 rounded-lg px-2.5 py-1.5 text-slate-600">
+              <div className="flex items-center gap-1.5">
+                <span className="font-semibold text-slate-700">Padrão de nome:</span>
+                <code className="font-mono text-emerald-800 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                  Parcial {localParcial || '1'}{getAreaIdentifier(featureType, sheetName) || '_'}BR-369.xlsx / .pdf
+                </code>
+              </div>
+              <span className="text-slate-400 font-medium">Formato: Parcial + Área + Rodovia</span>
             </div>
 
             <div className="text-[11px] text-slate-500 bg-amber-50/80 border border-amber-200/80 rounded-lg p-2.5 flex items-start gap-2">

@@ -2205,9 +2205,125 @@ function toRowElTag(toEl: any): any {
   );
 }
 
+function extractCleanRodoviaName(rodovia: string | null | undefined): string {
+  if (!rodovia) return 'Geral';
+  const trimmed = rodovia.trim();
+  if (!trimmed || trimmed.toLowerCase().includes('todas') || trimmed.toLowerCase() === 'geral') {
+    return 'Geral';
+  }
+
+  const match = trimmed.match(/\b([A-Za-z]{2})[\s\/\-_]?(\d{2,4})\b/);
+  if (match) {
+    return `${match[1].toUpperCase()}-${match[2]}`;
+  }
+
+  return trimmed
+    .replace(/[\/\\:*?"<>|\r\n]/g, '-')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^-+|-+$/g, '');
+}
+
+function getAreaIdentifier(featureType: string, sheetName?: string): string | null {
+  switch (featureType) {
+    case 'drenagem_superficial':
+      return '_DrenSuperficial_';
+    case 'drenagem_profunda':
+      return '_DrenProfunda_';
+    case 'sinalizacao_horizontal_dispositivo':
+      return '_SinHoriz_Dispositivo_';
+    case 'sinalizacao_horizontal_marca_viaria':
+      return '_SinHoriz_MarcaViaria_';
+    case 'sinalizacao_horizontal_zebrado':
+      return '_SinHoriz_Zebrado_';
+    case 'sinalizacao_vertical':
+      return '_SinVertical_';
+    case 'eps_defensa': {
+      const s = (sheetName || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+      if (s.includes('barreira') || s.includes('concreto')) {
+        return '_EPS_BarrConcreto_';
+      }
+      if (s.includes('metalica')) {
+        return '_EPS_DefensaMetalica_';
+      }
+      if (s.includes('oea') || s.includes('oae')) {
+        return '_EPS_Defensa OEA_';
+      }
+      return '_EPS_Defensa_';
+    }
+    default:
+      return null;
+  }
+}
+
+function buildStandardFileName(params: {
+  parcialNumber?: number | string | null;
+  featureType: string;
+  sheetName?: string;
+  rodoviaFilter?: string | null;
+  extension?: 'xlsx' | 'pdf' | 'xls';
+  fallbackOriginalName?: string;
+  estadoConservacaoFilter?: string | null;
+}): string {
+  const {
+    parcialNumber,
+    featureType,
+    sheetName,
+    rodoviaFilter,
+    extension = 'xlsx',
+    fallbackOriginalName,
+    estadoConservacaoFilter,
+  } = params;
+
+  const rawNum =
+    parcialNumber !== undefined && parcialNumber !== null
+      ? String(parcialNumber).replace(/\D/g, '')
+      : '1';
+  const num = rawNum || '1';
+  const parcialPart = `Parcial ${num}`;
+  const areaPart = getAreaIdentifier(featureType, sheetName);
+  const rodoviaPart = extractCleanRodoviaName(rodoviaFilter);
+
+  if (areaPart) {
+    return `${parcialPart}${areaPart}${rodoviaPart}.${extension}`;
+  }
+
+  // Fallback to legacy format if not mapped
+  const baseName = fallbackOriginalName
+    ? fallbackOriginalName.replace(/\.[^/.]+$/, '')
+    : 'planilha_filtrada';
+  const safeRodovia = rodoviaFilter ? rodoviaFilter.replace(/[\/\\:*?"<>|]/g, '-').trim() : '';
+  const safeEstado = estadoConservacaoFilter
+    ? estadoConservacaoFilter.replace(/[\/\\:*?"<>|]/g, '-').trim()
+    : '';
+
+  let suffix = '_filtrada';
+  if (safeRodovia && safeEstado) {
+    suffix = `_${safeRodovia}_${safeEstado}`;
+  } else if (safeRodovia) {
+    suffix = `_${safeRodovia}`;
+  } else if (safeEstado) {
+    suffix = `_${safeEstado}`;
+  }
+
+  return `${baseName}${suffix}.${extension}`;
+}
+
 // 3. Process endpoint
 app.post('/api/process', async (req, res) => {
-  const { fileId, sheetName, columnIndicesToRemove, estadoConservacaoFilter, rodoviaFilter, featureType, customFileName } = req.body as {
+  const {
+    fileId,
+    sheetName,
+    columnIndicesToRemove,
+    estadoConservacaoFilter,
+    rodoviaFilter,
+    featureType,
+    customFileName,
+    parcialNumber,
+  } = req.body as {
     fileId: string;
     sheetName: string;
     columnIndicesToRemove: number[];
@@ -2215,6 +2331,7 @@ app.post('/api/process', async (req, res) => {
     rodoviaFilter?: string | null;
     featureType?: string;
     customFileName?: string;
+    parcialNumber?: number | string | null;
   };
 
   if (!fileId || !sheetName || !Array.isArray(columnIndicesToRemove)) {
@@ -2240,19 +2357,15 @@ app.post('/api/process', async (req, res) => {
 
     let finalFileName = customFileName ? customFileName.trim() : '';
     if (!finalFileName) {
-      const parsedName = path.parse(fileInfo.originalName);
-      const safeRodovia = rodoviaFilter ? rodoviaFilter.replace(/[\/\\:*?"<>|]/g, '-').trim() : '';
-      const safeEstado = estadoConservacaoFilter ? estadoConservacaoFilter.replace(/[\/\\:*?"<>|]/g, '-').trim() : '';
-
-      let suffix = '_filtrada';
-      if (safeRodovia && safeEstado) {
-        suffix = `_${safeRodovia}_${safeEstado}`;
-      } else if (safeRodovia) {
-        suffix = `_${safeRodovia}`;
-      } else if (safeEstado) {
-        suffix = `_${safeEstado}`;
-      }
-      finalFileName = `${parsedName.name}${suffix}.xlsx`;
+      finalFileName = buildStandardFileName({
+        parcialNumber,
+        featureType: featureType || 'drenagem_profunda',
+        sheetName,
+        rodoviaFilter,
+        extension: 'xlsx',
+        fallbackOriginalName: fileInfo.originalName,
+        estadoConservacaoFilter,
+      });
     } else if (!finalFileName.toLowerCase().endsWith('.xlsx')) {
       finalFileName = `${finalFileName}.xlsx`;
     }

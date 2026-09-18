@@ -19,16 +19,21 @@ import {
 import { UploadResponse, DrainageFeatureType } from '../types';
 import { DRAINAGE_FEATURES } from '../constants/presets';
 import { APP_VERSION } from '../constants/version';
+import { getAreaIdentifier } from '../utils/fileNaming';
 
 interface UploadStepProps {
   selectedFeature: DrainageFeatureType;
   onFeatureChange: (feature: DrainageFeatureType) => void;
+  parcialNumber: string;
+  onParcialChange: (parcial: string) => void;
   onUploadSuccess: (data: UploadResponse) => void;
 }
 
 export const UploadStep: React.FC<UploadStepProps> = ({
   selectedFeature,
   onFeatureChange,
+  parcialNumber,
+  onParcialChange,
   onUploadSuccess,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
@@ -337,13 +342,30 @@ export const UploadStep: React.FC<UploadStepProps> = ({
             </p>
           </div>
 
-          {/* Quick Dropdown select */}
-          <div className="shrink-0">
+          {/* Quick Dropdown select & Parcial Selector */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0">
+            {/* Parcial selector dropdown */}
+            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-300 rounded-xl px-2.5 py-1.5 shadow-2xs">
+              <span className="text-xs font-bold text-slate-700 whitespace-nowrap">Parcial:</span>
+              <select
+                id="parcial-select-dropdown"
+                value={parcialNumber}
+                onChange={(e) => onParcialChange(e.target.value)}
+                className="text-xs font-bold text-emerald-800 bg-transparent focus:outline-none cursor-pointer pr-1"
+              >
+                {Array.from({ length: 30 }, (_, i) => i + 1).map((n) => (
+                  <option key={n} value={String(n)}>
+                    Parcial {n}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <select
               id="feature-select-dropdown"
               value={selectedFeature}
               onChange={(e) => onFeatureChange(e.target.value as DrainageFeatureType)}
-              className="w-full sm:w-72 px-3 py-2 text-xs font-bold rounded-xl border border-slate-300 bg-slate-50 text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer shadow-2xs"
+              className="w-full sm:w-64 px-3 py-2 text-xs font-bold rounded-xl border border-slate-300 bg-slate-50 text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer shadow-2xs"
             >
               <option value="drenagem_profunda">Drenagem Profunda</option>
               <option value="drenagem_superficial">Drenagem Superficial</option>
@@ -776,6 +798,19 @@ export const UploadStep: React.FC<UploadStepProps> = ({
               )}
             </div>
           </div>
+        </div>
+
+        {/* Standard File Naming Format Information Banner */}
+        <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-600 bg-slate-50/80 px-3.5 py-2.5 rounded-xl border border-slate-200/80">
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-slate-700">Nome dos arquivos de saída:</span>
+            <span className="font-mono text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 font-bold text-[11px]">
+              Parcial {parcialNumber || '1'}{getAreaIdentifier(selectedFeature) || '_'}BR-369.xlsx / .pdf
+            </span>
+          </div>
+          <span className="text-[11px] text-slate-500">
+            Formato: <strong className="text-slate-700">Parcial + Área + Rodovia</strong>
+          </span>
         </div>
       </div>
 
