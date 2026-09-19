@@ -78,7 +78,7 @@ export default function App() {
       <Header currentStep={currentStep} onReset={handleReset} />
 
       {/* Main Container */}
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-2 sm:px-4 py-2 space-y-2 flex flex-col justify-start">
         {/* Wizard Step Indicator */}
         <StepIndicator
           currentStep={currentStep}
@@ -87,7 +87,7 @@ export default function App() {
         />
 
         {/* Dynamic Content by Step */}
-        <div className="relative min-h-[460px]">
+        <div className="relative flex-1">
           <AnimatePresence mode="wait">
             {currentStep === 1 && (
               <motion.div
@@ -147,15 +147,15 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-slate-200/80 bg-white py-4 mt-auto">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
+      <footer className="border-t border-slate-200/80 bg-white py-1.5 mt-auto shrink-0">
+        <div className="max-w-7xl mx-auto px-4 flex items-center justify-between gap-2 text-[11px] text-slate-500">
           <div>
-            Limpador de Planilhas Excel XLSX • Suporte a arquivos de até 100 MB
+            Limpador e Padronizador de Planilhas • Suporte a arquivos de até 500 MB
           </div>
-          <div className="flex items-center gap-4 text-slate-400">
-            <span>Preservação de formatos e fórmulas</span>
+          <div className="hidden sm:flex items-center gap-3 text-slate-400 text-[10px]">
+            <span>Preservação de formatos e fotos</span>
             <span>•</span>
-            <span>Processamento local temporário</span>
+            <span>Processamento temporário</span>
           </div>
         </div>
       </footer>

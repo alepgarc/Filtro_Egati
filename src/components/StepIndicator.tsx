@@ -16,66 +16,53 @@ export const StepIndicator: React.FC<StepIndicatorProps> = ({
   const steps = [
     {
       step: 1 as Step,
-      title: '1. Enviar planilha',
-      subtitle: 'Upload de arquivo XLSX até 100 MB',
+      title: '1. Enviar Planilha',
       icon: UploadCloud,
     },
     {
       step: 2 as Step,
-      title: '2. Selecionar colunas',
-      subtitle: 'Escolha a aba e colunas para remover',
+      title: '2. Selecionar & Filtrar',
       icon: CheckSquare,
     },
     {
       step: 3 as Step,
-      title: '3. Baixar arquivo processado',
-      subtitle: 'Resumo e download da nova planilha',
+      title: '3. Baixar Arquivos',
       icon: Download,
     },
   ];
 
   return (
-    <div className="w-full bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        {steps.map((item, idx) => {
+    <div className="w-full bg-white border border-slate-200 rounded-xl p-1 shadow-2xs shrink-0">
+      <div className="grid grid-cols-3 gap-1.5">
+        {steps.map((item) => {
           const isCompleted = currentStep > item.step;
           const isCurrent = currentStep === item.step;
           const isClickable = canNavigateToStep ? canNavigateToStep(item.step) : false;
           const IconComponent = item.icon;
 
           return (
-            <div
+            <button
               key={item.step}
+              type="button"
+              disabled={!isClickable}
               onClick={() => isClickable && onStepClick && onStepClick(item.step)}
-              className={`flex items-center gap-3.5 p-3 rounded-xl transition-all ${
+              className={`flex items-center justify-center gap-2 py-1.5 px-3 rounded-lg text-xs font-semibold transition-all ${
                 isCurrent
-                  ? 'bg-emerald-50/80 border border-emerald-300 text-emerald-950'
+                  ? 'bg-emerald-600 text-white shadow-2xs'
                   : isCompleted
-                  ? 'bg-slate-50 border border-slate-200/90 text-slate-800 cursor-pointer hover:bg-slate-100'
-                  : 'bg-slate-50/50 border border-transparent text-slate-400'
+                  ? 'bg-slate-100 text-slate-800 hover:bg-slate-200 cursor-pointer'
+                  : 'bg-transparent text-slate-400 cursor-not-allowed'
               }`}
             >
-              <div
-                className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 text-sm font-semibold transition-colors ${
-                  isCompleted
-                    ? 'bg-emerald-600 text-white'
-                    : isCurrent
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'bg-slate-200 text-slate-500'
-                }`}
-              >
-                {isCompleted ? <Check className="w-4 h-4 stroke-[2.5]" /> : <IconComponent className="w-4 h-4" />}
+              <div className="shrink-0">
+                {isCompleted ? (
+                  <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                ) : (
+                  <IconComponent className="w-3.5 h-3.5" />
+                )}
               </div>
-
-              <div className="min-w-0">
-                <div className="text-sm font-semibold truncate">
-                  {item.title}
-                </div>
-                <div className={`text-xs truncate ${isCurrent ? 'text-emerald-700' : 'text-slate-500'}`}>
-                  {item.subtitle}
-                </div>
-              </div>
-            </div>
+              <span className="truncate">{item.title}</span>
+            </button>
           );
         })}
       </div>
