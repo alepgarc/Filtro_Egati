@@ -29,38 +29,100 @@ export function getAreaIdentifier(
   featureType: string,
   sheetName?: string
 ): string | null {
-  switch (featureType) {
-    case 'drenagem_superficial':
-      return '_DrenSuperficial_';
-    case 'drenagem_profunda':
-      return '_DrenProfunda_';
-    case 'sinalizacao_horizontal_dispositivo':
-      return '_SinHoriz_Dispositivo_';
-    case 'sinalizacao_horizontal_marca_viaria':
-      return '_SinHoriz_MarcaViaria_';
-    case 'sinalizacao_horizontal_zebrado':
-      return '_SinHoriz_Zebrado_';
-    case 'sinalizacao_vertical':
-      return '_SinVertical_';
-    case 'eps_defensa': {
-      const s = (sheetName || '')
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '');
-      if (s.includes('barreira') || s.includes('concreto')) {
-        return '_EPS_BarrConcreto_';
-      }
-      if (s.includes('metalica')) {
-        return '_EPS_DefensaMetalica_';
-      }
-      if (s.includes('oea') || s.includes('oae')) {
-        return '_EPS_Defensa OEA_';
-      }
-      return '_EPS_Defensa_';
-    }
-    default:
-      return null;
+  const normFeature = (featureType || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+
+  const s = (sheetName || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+
+  // 1. Sinalização Horizontal - Marca Viária
+  if (
+    normFeature === 'sinalizacao_horizontal_marca_viaria' ||
+    normFeature.includes('marca_viaria') ||
+    normFeature.includes('marcas_viarias') ||
+    normFeature.includes('marca viaria') ||
+    normFeature.includes('marcas viarias') ||
+    normFeature.includes('sh_marca') ||
+    normFeature === 'marca_viaria' ||
+    s.includes('marca')
+  ) {
+    return '_SinHoriz_MarcaViaria_';
   }
+
+  // 2. Sinalização Horizontal - Dispositivo
+  if (
+    normFeature === 'sinalizacao_horizontal_dispositivo' ||
+    normFeature.includes('dispositivo') ||
+    normFeature.includes('sh_disp') ||
+    s.includes('disp')
+  ) {
+    return '_SinHoriz_Dispositivo_';
+  }
+
+  // 3. Sinalização Horizontal - Zebrado
+  if (
+    normFeature === 'sinalizacao_horizontal_zebrado' ||
+    normFeature.includes('zebrado') ||
+    normFeature.includes('sh_zeb') ||
+    s.includes('zeb')
+  ) {
+    return '_SinHoriz_Zebrado_';
+  }
+
+  // 4. Sinalização Vertical
+  if (
+    normFeature === 'sinalizacao_vertical' ||
+    normFeature.includes('vertical') ||
+    s.includes('vertical')
+  ) {
+    return '_SinVertical_';
+  }
+
+  // 5. Drenagem Superficial
+  if (
+    normFeature === 'drenagem_superficial' ||
+    normFeature.includes('superficial') ||
+    s.includes('superficial')
+  ) {
+    return '_DrenSuperficial_';
+  }
+
+  // 6. Drenagem Profunda
+  if (
+    normFeature === 'drenagem_profunda' ||
+    normFeature.includes('profunda') ||
+    s.includes('profunda')
+  ) {
+    return '_DrenProfunda_';
+  }
+
+  // 7. EPS Defensa
+  if (
+    normFeature === 'eps_defensa' ||
+    normFeature.includes('defensa') ||
+    normFeature.includes('eps') ||
+    s.includes('defensa') ||
+    s.includes('barreira')
+  ) {
+    if (s.includes('barreira') || s.includes('concreto')) {
+      return '_EPS_BarrConcreto_';
+    }
+    if (s.includes('metalica')) {
+      return '_EPS_DefensaMetalica_';
+    }
+    if (s.includes('oea') || s.includes('oae')) {
+      return '_EPS_Defensa OEA_';
+    }
+    return '_EPS_Defensa_';
+  }
+
+  return null;
 }
 
 export function buildStandardFileName(params: {

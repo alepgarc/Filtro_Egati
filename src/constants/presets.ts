@@ -127,6 +127,33 @@ export const SINALIZACAO_HORIZONTAL_DISPOSITIVO_FIELDS = [
   'Bordo',
   'Cor',
   'Resultado Geral',
+  'Foto1',
+  'Foto2',
+  'Foto3',
+  'Foto4',
+  'Foto5',
+  'Foto6',
+  'Foto7',
+  'Foto8',
+  'Foto9',
+  'Foto10',
+  'Foto11',
+  'Foto12',
+  'Foto13',
+  'Foto14',
+  'Foto15',
+] as const;
+
+export const SINALIZACAO_HORIZONTAL_DISPOSITIVO_TURBO_FIELDS = [
+  'CodAuto',
+  'TipoHorizontal',
+  'Localização',
+  'Rodovia',
+  'Km',
+  'Sentido',
+  'Bordo',
+  'Cor',
+  'Resultado Geral',
   'Foto 1',
   'Foto 2',
   'Foto 3',
@@ -135,6 +162,33 @@ export const SINALIZACAO_HORIZONTAL_DISPOSITIVO_FIELDS = [
 ] as const;
 
 export const SINALIZACAO_HORIZONTAL_MARCA_VIARIA_FIELDS = [
+  'CodAuto',
+  'Localização',
+  'Rodovia',
+  'Km',
+  'Sentido',
+  'TipoHorizontal',
+  'Tipo',
+  'Cor',
+  'Foto1',
+  'Foto2',
+  'Foto3',
+  'Foto4',
+  'Foto5',
+  'Foto6',
+  'Foto7',
+  'Foto8',
+  'Foto9',
+  'Foto10',
+  'Foto11',
+  'Foto12',
+  'Foto13',
+  'Foto14',
+  'Foto15',
+  'Resultado',
+] as const;
+
+export const SINALIZACAO_HORIZONTAL_MARCA_VIARIA_TURBO_FIELDS = [
   'CodAuto',
   'Localização',
   'Rodovia',
@@ -152,6 +206,32 @@ export const SINALIZACAO_HORIZONTAL_MARCA_VIARIA_FIELDS = [
 ] as const;
 
 export const SINALIZACAO_HORIZONTAL_ZEBRADO_FIELDS = [
+  'codAuto',
+  'tipoHorizontal',
+  'localizacao',
+  'rodovia',
+  'km',
+  'sentido',
+  'cor',
+  'resultadoGeral',
+  'Foto1',
+  'Foto2',
+  'Foto3',
+  'Foto4',
+  'Foto5',
+  'Foto6',
+  'Foto7',
+  'Foto8',
+  'Foto9',
+  'Foto10',
+  'Foto11',
+  'Foto12',
+  'Foto13',
+  'Foto14',
+  'Foto15',
+] as const;
+
+export const SINALIZACAO_HORIZONTAL_ZEBRADO_TURBO_FIELDS = [
   'codAuto',
   'tipoHorizontal',
   'localizacao',
@@ -220,7 +300,7 @@ export const DRAINAGE_FEATURES: Record<DrainageFeatureType, DrainageFeatureConfi
     name: 'Sinalização Horizontal - Dispositivo',
     tagline: 'Tachas, Marcadores e Dispositivos Horizontais',
     description:
-      'Mantém colunas de CodAuto, TipoHorizontal, Localização, Rodovia, Km, Sentido, Bordo, Cor, Resultado Geral e Fotos 1 a 5.',
+      'Mantém colunas de CodAuto, TipoHorizontal, Localização, Rodovia, Km, Sentido, Bordo, Cor, Resultado Geral e Fotos 1 a 15.',
     fields: SINALIZACAO_HORIZONTAL_DISPOSITIVO_FIELDS,
   },
   sinalizacao_horizontal_marca_viaria: {
@@ -228,7 +308,7 @@ export const DRAINAGE_FEATURES: Record<DrainageFeatureType, DrainageFeatureConfi
     name: 'Sinalização Horizontal - Marca Viária',
     tagline: 'Linhas, Faixas e Pinturas Viárias',
     description:
-      'Mantém colunas de CodAuto, Localização, Rodovia, Km, Sentido, TipoHorizontal, Tipo, Cor, Fotos 1 a 5 e Resultado.',
+      'Mantém colunas de CodAuto, Localização, Rodovia, Km, Sentido, TipoHorizontal, Tipo, Cor, Fotos 1 a 15 e Resultado.',
     fields: SINALIZACAO_HORIZONTAL_MARCA_VIARIA_FIELDS,
   },
   sinalizacao_horizontal_zebrado: {
@@ -236,7 +316,7 @@ export const DRAINAGE_FEATURES: Record<DrainageFeatureType, DrainageFeatureConfi
     name: 'Sinalização Horizontal - Zebrado',
     tagline: 'Canalizações, Marcas de Canalização e Zebrados',
     description:
-      'Mantém colunas de codAuto, tipoHorizontal, localizacao, rodovia, km, sentido, cor, resultadoGeral e fotos 1 a 5.',
+      'Mantém colunas de codAuto, tipoHorizontal, localizacao, rodovia, km, sentido, cor, resultadoGeral e fotos 1 a 15.',
     fields: SINALIZACAO_HORIZONTAL_ZEBRADO_FIELDS,
   },
   eps_defensa: {
@@ -281,12 +361,24 @@ const sinalizacaoHorizontalDispositivoNormSet = new Set(
   SINALIZACAO_HORIZONTAL_DISPOSITIVO_FIELDS.map((f) => normalizeColKey(f))
 );
 
+const sinalizacaoHorizontalDispositivoTurboNormSet = new Set(
+  SINALIZACAO_HORIZONTAL_DISPOSITIVO_TURBO_FIELDS.map((f) => normalizeColKey(f))
+);
+
 const sinalizacaoHorizontalMarcaViariaNormSet = new Set(
   SINALIZACAO_HORIZONTAL_MARCA_VIARIA_FIELDS.map((f) => normalizeColKey(f))
 );
 
+const sinalizacaoHorizontalMarcaViariaTurboNormSet = new Set(
+  SINALIZACAO_HORIZONTAL_MARCA_VIARIA_TURBO_FIELDS.map((f) => normalizeColKey(f))
+);
+
 const sinalizacaoHorizontalZebradoNormSet = new Set(
   SINALIZACAO_HORIZONTAL_ZEBRADO_FIELDS.map((f) => normalizeColKey(f))
+);
+
+const sinalizacaoHorizontalZebradoTurboNormSet = new Set(
+  SINALIZACAO_HORIZONTAL_ZEBRADO_TURBO_FIELDS.map((f) => normalizeColKey(f))
 );
 
 const epsDefensaNormSet = new Set(
@@ -319,16 +411,16 @@ export const isDefaultPresetField = (
         normSet = superficialTurboNormSet;
         break;
       case 'sinalizacao_horizontal_dispositivo':
-        fields = SINALIZACAO_HORIZONTAL_DISPOSITIVO_FIELDS;
-        normSet = sinalizacaoHorizontalDispositivoNormSet;
+        fields = SINALIZACAO_HORIZONTAL_DISPOSITIVO_TURBO_FIELDS;
+        normSet = sinalizacaoHorizontalDispositivoTurboNormSet;
         break;
       case 'sinalizacao_horizontal_marca_viaria':
-        fields = SINALIZACAO_HORIZONTAL_MARCA_VIARIA_FIELDS;
-        normSet = sinalizacaoHorizontalMarcaViariaNormSet;
+        fields = SINALIZACAO_HORIZONTAL_MARCA_VIARIA_TURBO_FIELDS;
+        normSet = sinalizacaoHorizontalMarcaViariaTurboNormSet;
         break;
       case 'sinalizacao_horizontal_zebrado':
-        fields = SINALIZACAO_HORIZONTAL_ZEBRADO_FIELDS;
-        normSet = sinalizacaoHorizontalZebradoNormSet;
+        fields = SINALIZACAO_HORIZONTAL_ZEBRADO_TURBO_FIELDS;
+        normSet = sinalizacaoHorizontalZebradoTurboNormSet;
         break;
       case 'drenagem_profunda':
       default:
@@ -415,7 +507,7 @@ export const isDefaultPresetField = (
       feature === 'sinalizacao_horizontal_marca_viaria' ||
       feature === 'sinalizacao_horizontal_zebrado'
     ) {
-      return photoNum >= 1 && photoNum <= 5;
+      return photoNum >= 1 && photoNum <= 15;
     }
     // drenagem_profunda, drenagem_superficial (standard preset: 1 to 15)
     return photoNum >= 1 && photoNum <= 15;
@@ -501,8 +593,7 @@ export const isDefaultPresetField = (
     }
   } else if (
     feature === 'sinalizacao_horizontal_dispositivo' ||
-    feature === 'sinalizacao_horizontal_marca_viaria' ||
-    feature === 'sinalizacao_horizontal_zebrado'
+    feature === 'sinalizacao_horizontal_marca_viaria'
   ) {
     if (
       norm === 'resultadogeral' ||
@@ -528,6 +619,18 @@ export const isDefaultPresetField = (
     if (norm === 'cor') {
       return true;
     }
+  } else if (feature === 'sinalizacao_horizontal_zebrado') {
+    // Exact requested fields for Zebrado:
+    // codAuto, tipoHorizontal, localizacao, rodovia, km, sentido, cor, resultadoGeral, Foto1..Foto15 (Standard) / Foto1..Foto5 (Turbo)
+    if (norm === 'codauto') return true;
+    if (norm === 'tipohorizontal') return true;
+    if (norm === 'localizacao') return true;
+    if (norm === 'rodovia') return true;
+    if (norm === 'km' || norm === 'kmlegenda' || norm === 'km_legenda') return true;
+    if (norm === 'sentido') return true;
+    if (norm === 'cor') return true;
+    if (norm === 'resultadogeral' || norm === 'resultado_geral') return true;
+    return false;
   } else if (feature === 'eps_defensa') {
     if (
       norm === 'kmfinal' ||

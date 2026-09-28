@@ -196,7 +196,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
     featureType === 'sinalizacao_horizontal_marca_viaria' ||
     featureType === 'sinalizacao_horizontal_zebrado';
   const defaultFilterValue =
-    featureType === 'eps_defensa' ? 'Todos' : isReprovadoFeature ? 'Reprovado' : 'PRECÁRIO';
+    featureType === 'eps_defensa' ? 'Ruim' : isReprovadoFeature ? 'Reprovado' : 'PRECÁRIO';
 
   const [items, setItems] = useState<RodoviaProcessItem[]>([]);
   const [selectedEstadoFilter, setSelectedEstadoFilter] = useState<string>(defaultFilterValue);
@@ -222,7 +222,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
   // For EPS-Defensa, target the 3 specific tabs
   const targetSheets = React.useMemo(() => {
     if (featureType === 'eps_defensa') {
-      const expected = ['Barreira de Concreto', 'Defensa Metalica', 'Defensa OAE'];
+      const expected = ['Barreira de Concreto', 'Defensa Metalica', 'Defensa Metálica', 'Defensa OAE', 'Defensa OEA'];
       if (sheetNames && sheetNames.length > 0) {
         const matched = sheetNames.filter((sn) => {
           const normSn = normalizeColKey(sn);
@@ -238,7 +238,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
         });
         return matched.length > 0 ? matched : sheetNames;
       }
-      return expected;
+      return ['Barreira de Concreto', 'Defensa Metalica', 'Defensa OAE'];
     }
     return [sheetName];
   }, [featureType, sheetNames, sheetName]);
@@ -303,7 +303,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
   // Extract all unique non-empty status values from rowFiltersData
   const availableStatusOptions = React.useMemo(() => {
     if (featureType === 'eps_defensa') {
-      return ['Todos'];
+      return ['Ruim', 'Regular', 'Boa', 'Todos'];
     }
 
     const seenNorm = new Set<string>();
@@ -586,7 +586,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                 sheetName: targetTab,
                 columnIndicesToRemove: colsToRemove,
                 estadoConservacaoFilter:
-                  featureType === 'eps_defensa' || selectedEstadoFilter.toLowerCase() === 'todos'
+                  selectedEstadoFilter.toLowerCase() === 'todos'
                     ? null
                     : selectedEstadoFilter.trim() !== ''
                     ? selectedEstadoFilter
@@ -803,47 +803,35 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                 </div>
               </div>
 
-              {featureType === 'eps_defensa' ? (
-                <div className="bg-white p-2.5 rounded-lg border border-slate-200 flex items-center gap-2">
-                  <div className="w-6 h-6 rounded-md bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
-                    <CheckCircle2 className="w-4 h-4" />
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 flex items-center gap-2 justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-md bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+                    <Filter className="w-4 h-4" />
                   </div>
                   <div>
-                    <div className="font-bold text-slate-800">Sem Filtro de Estado</div>
+                    <div className="font-bold text-slate-800">
+                      {featureType === 'eps_defensa' ? 'Aparência Geral' : 'Status'}
+                    </div>
                     <div className="text-[11px] text-slate-500">
-                      Todos os registros por rodovia
+                      {featureType === 'eps_defensa'
+                        ? 'Filtrar por Aparência Geral (padrão: Ruim)'
+                        : 'Filtrar por situação'}
                     </div>
                   </div>
                 </div>
-              ) : (
-                <div className="bg-white p-2.5 rounded-lg border border-slate-200 flex items-center gap-2 justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 rounded-md bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
-                      <Filter className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="font-bold text-slate-800">
-                        Status
-                      </div>
-                      <div className="text-[11px] text-slate-500">
-                        Filtrar por situação
-                      </div>
-                    </div>
-                  </div>
-                  <select
-                    value={selectedEstadoFilter}
-                    onChange={(e) => setSelectedEstadoFilter(e.target.value)}
-                    disabled={isRunning}
-                    className="text-xs font-bold text-amber-900 bg-amber-50 border border-amber-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer disabled:opacity-50"
-                  >
-                    {availableStatusOptions.map((opt) => (
-                      <option key={opt} value={opt}>
-                        {opt === 'Todos' ? 'Todos' : opt}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
+                <select
+                  value={selectedEstadoFilter}
+                  onChange={(e) => setSelectedEstadoFilter(e.target.value)}
+                  disabled={isRunning}
+                  className="text-xs font-bold text-amber-900 bg-amber-50 border border-amber-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer disabled:opacity-50"
+                >
+                  {availableStatusOptions.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt === 'Todos' ? 'Todos' : opt}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {/* Standard Naming format preview */}
@@ -965,8 +953,10 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                             {item.rodovia}
                           </span>
                           {featureType === 'eps_defensa' ? (
-                            <span className="text-[10px] font-bold bg-emerald-100 text-emerald-900 border border-emerald-300 px-1.5 py-0.2 rounded-md">
-                              {item.totalCount} {item.totalCount === 1 ? 'registro' : 'registros'}
+                            <span className="text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 px-1.5 py-0.2 rounded-md">
+                              {selectedEstadoFilter.toLowerCase() === 'todos'
+                                ? `${item.totalCount} ${item.totalCount === 1 ? 'registro' : 'registros'}`
+                                : `${item.precaroCount} ${item.precaroCount === 1 ? 'registro' : 'registros'} (${selectedEstadoFilter})`}
                             </span>
                           ) : item.precaroCount > 0 ? (
                             <span className="text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 px-1.5 py-0.2 rounded-md">

@@ -162,6 +162,23 @@ interface ProcessedFileInfo {
 const uploadedFiles = new Map<string, UploadedFileInfo>();
 const processedFiles = new Map<string, ProcessedFileInfo>();
 
+// Safe filename and text encoding recovery (fixes mojibake like Ã¡ -> á, Âª -> ª without corrupting already valid UTF-8 strings)
+function fixFileNameEncoding(name: string): string {
+  if (!name) return '';
+  let fixed = name;
+  // If string contains UTF-8 sequences erroneously decoded as Latin-1
+  if (/[\u00C2-\u00F4][\u0080-\u00BF]/.test(fixed)) {
+    try {
+      const decoded = Buffer.from(fixed, 'latin1').toString('utf8');
+      if (!decoded.includes('\uFFFD') && !decoded.includes('ÿý')) {
+        fixed = decoded;
+      }
+    } catch {}
+  }
+  // Remove any replacement character or ÿý artifacts
+  return fixed.replace(/\uFFFD/g, '').replace(/ÿý/g, '');
+}
+
 // Helpers for EstadoConservacao / Situação Retrorrefletancia and Rodovia column and filter detection
 function normalizeString(str: string): string {
   return (str || '')
@@ -192,9 +209,12 @@ function isTargetRowStatusCol(name: string, featureType?: string): boolean {
   }
 
   // Feature-specific logic with fallback to broad status matching
+  if (featureType === 'sinalizacao_horizontal_zebrado') {
+    return n === 'resultadogeral' || n === 'resultado_geral';
+  }
+
   if (
     featureType === 'sinalizacao_horizontal_dispositivo' ||
-    featureType === 'sinalizacao_horizontal_zebrado' ||
     featureType === 'sinalizacao_horizontal_marca_viaria'
   ) {
     if (
@@ -253,7 +273,13 @@ function isTargetRowStatusCol(name: string, featureType?: string): boolean {
       n === 'estadodeconservacao' ||
       n.startsWith('estadoconservac') ||
       n === 'estado' ||
-      n === 'situacao'
+      n === 'situacao' ||
+      n === 'aparencia' ||
+      n === 'aparenciageral' ||
+      n === 'condicao' ||
+      n === 'resultado' ||
+      n === 'resultadogeral' ||
+      n === 'status'
     ) {
       return true;
     }
@@ -568,9 +594,16 @@ async function getSheetDetailsAsync(
       headerRowIdx = 1;
     }
 
-    const headerRow: string[] = (rawRows[headerRowIdx] || []).map((h, i) =>
-      String(h || `Coluna ${idxToCol(i)}`).trim()
-    );
+    const headerRow: string[] = (rawRows[headerRowIdx] || []).map((h, i) => {
+      const trimmed = String(h || `Coluna ${idxToCol(i)}`).trim();
+      if (
+        featureType === 'sinalizacao_horizontal_zebrado' &&
+        (trimmed.toLowerCase() === 'kmlegenda' || trimmed.toLowerCase() === 'km_legenda')
+      ) {
+        return 'km';
+      }
+      return trimmed;
+    });
     const columns = headerRow.map((name, index) => ({
       index,
       name,
@@ -818,12 +851,7 @@ app.post('/api/upload-chunk', (req, res) => {
       const totalChunks = parseInt(req.body.totalChunks, 10);
       const uploadId = String(req.body.uploadId || '').replace(/[^a-zA-Z0-9_\-]/g, '');
       const rawFileName = req.body.fileName || 'planilha.xlsx';
-      let fileName = rawFileName;
-      try {
-        fileName = Buffer.from(rawFileName, 'latin1').toString('utf8');
-      } catch {
-        fileName = rawFileName;
-      }
+      const fileName = fixFileNameEncoding(rawFileName);
       const featureType = (req.body.featureType as string) || 'drenagem_profunda';
 
       if (isNaN(chunkIndex) || isNaN(totalChunks) || !uploadId) {
@@ -929,12 +957,7 @@ app.post('/api/upload', (req, res) => {
 
     try {
       const filePath = req.file.path;
-      let originalName = req.file.originalname;
-      try {
-        originalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
-      } catch {
-        originalName = req.file.originalname;
-      }
+      const originalName = fixFileNameEncoding(req.file.originalname);
       const featureType = (req.body?.featureType as string) || 'drenagem_profunda';
 
       const result = await processCompletedUpload(
@@ -968,7 +991,21 @@ const handleSheetDetails = async (req: express.Request, res: express.Response) =
     return res.status(400).json({ error: 'Parâmetros fileId e sheetName são obrigatórios.' });
   }
 
-  const fileInfo = uploadedFiles.get(fileId);
+  let fileInfo = uploadedFiles.get(fileId);
+  if (!fileInfo) {
+    const directPath = path.join(UPLOAD_DIR, fileId);
+    if (fs.existsSync(directPath)) {
+      const stat = fs.statSync(directPath);
+      fileInfo = {
+        fileId,
+        filePath: directPath,
+        originalName: fileId,
+        fileSize: stat.size,
+        uploadedAt: Date.now(),
+        sheetNames: [sheetName],
+      };
+    }
+  }
   if (!fileInfo || !fs.existsSync(fileInfo.filePath)) {
     return res.status(404).json({ error: 'Arquivo não encontrado ou sessão expirada.' });
   }
@@ -1662,6 +1699,7 @@ async function processWorkbookWithZip(
 
   // 11. Reset cursor and sheet view position to cell A1 (so Excel opens with cursor on A1 instead of remote cell)
   resetSheetViewCursorToA1(sheetDom);
+  enforceWorksheetSchemaOrder(sheetDom);
 
   // Save modified sheet XML back to zip
   zip.file(sheetPath, serializer.serializeToString(sheetDom));
@@ -1787,55 +1825,88 @@ async function processWorkbookWithZip(
       if (a && a.parentNode) a.parentNode.removeChild(a);
     });
 
-    zip.file(filename, serializer.serializeToString(dDom));
+    const remainingAnchors = Array.from(dDom.documentElement.childNodes).filter(
+      (n: any) => n.nodeType === 1
+    );
 
-    // Prune unreferenced relationships in this drawing's .rels file
-    const drawingRelsPath = filename
-      .replace('drawings/', 'drawings/_rels/')
-      .replace('.xml', '.xml.rels');
+    if (remainingAnchors.length === 0) {
+      // Remove drawing reference from sheetDom
+      const dNodes = Array.from(sheetDom.getElementsByTagName('drawing'));
+      dNodes.forEach((dn: any) => {
+        if (dn && dn.parentNode) dn.parentNode.removeChild(dn);
+      });
+      zip.file(sheetPath, serializer.serializeToString(sheetDom));
+      zip.remove(filename);
+      const drawingRelsPath = filename
+        .replace('drawings/', 'drawings/_rels/')
+        .replace('.xml', '.xml.rels');
+      if (zip.files[drawingRelsPath]) zip.remove(drawingRelsPath);
+    } else {
+      // Sort remaining anchors by row then col in drawing XML
+      remainingAnchors.sort((a: any, b: any) => {
+        const fromA = a.getElementsByTagName('xdr:from').item(0) || a.getElementsByTagName('from').item(0);
+        const fromB = b.getElementsByTagName('xdr:from').item(0) || b.getElementsByTagName('from').item(0);
+        const rA = parseInt(fromA?.getElementsByTagName('xdr:row').item(0)?.textContent || fromA?.getElementsByTagName('row').item(0)?.textContent || '0', 10);
+        const rB = parseInt(fromB?.getElementsByTagName('xdr:row').item(0)?.textContent || fromB?.getElementsByTagName('row').item(0)?.textContent || '0', 10);
+        if (rA !== rB) return rA - rB;
+        const cA = parseInt(fromA?.getElementsByTagName('xdr:col').item(0)?.textContent || fromA?.getElementsByTagName('col').item(0)?.textContent || '0', 10);
+        const cB = parseInt(fromB?.getElementsByTagName('xdr:col').item(0)?.textContent || fromB?.getElementsByTagName('col').item(0)?.textContent || '0', 10);
+        return cA - cB;
+      });
+      while (dDom.documentElement.firstChild) {
+        dDom.documentElement.removeChild(dDom.documentElement.firstChild);
+      }
+      remainingAnchors.forEach((a: any) => dDom.documentElement.appendChild(a));
+      zip.file(filename, serializer.serializeToString(dDom));
 
-    if (zip.files[drawingRelsPath]) {
-      try {
-        const dRelsStr = await zip.files[drawingRelsPath].async('string');
-        const dRelsDom = parser.parseFromString(dRelsStr, 'text/xml');
-        const dRelsNodes = getRelsNodes(dRelsDom);
+      // Prune unreferenced relationships in this drawing's .rels file
+      const drawingRelsPath = filename
+        .replace('drawings/', 'drawings/_rels/')
+        .replace('.xml', '.xml.rels');
 
-        // Find all r:embed or embed or link attributes currently used in remaining drawing anchors
-        const usedEmbedIds = new Set<string>();
-        const allElements = dDom.getElementsByTagName('*');
-        for (let k = 0; k < allElements.length; k++) {
-          const el = allElements.item(k);
-          if (el && el.attributes) {
-            for (let a = 0; a < el.attributes.length; a++) {
-              const attr = el.attributes.item(a);
-              if (
-                attr &&
-                (attr.name === 'r:embed' ||
-                  attr.name === 'r:link' ||
-                  attr.name.endsWith(':embed') ||
-                  attr.name.endsWith(':link') ||
-                  attr.localName === 'embed')
-              ) {
-                if (attr.value) usedEmbedIds.add(attr.value);
+      if (zip.files[drawingRelsPath]) {
+        try {
+          const dRelsStr = await zip.files[drawingRelsPath].async('string');
+          const dRelsDom = parser.parseFromString(dRelsStr, 'text/xml');
+          const dRelsNodes = getRelsNodes(dRelsDom);
+
+          // Find all r:embed or embed or link attributes currently used in remaining drawing anchors
+          const usedEmbedIds = new Set<string>();
+          const allElements = dDom.getElementsByTagName('*');
+          for (let k = 0; k < allElements.length; k++) {
+            const el = allElements.item(k);
+            if (el && el.attributes) {
+              for (let a = 0; a < el.attributes.length; a++) {
+                const attr = el.attributes.item(a);
+                if (
+                  attr &&
+                  (attr.name === 'r:embed' ||
+                    attr.name === 'r:link' ||
+                    attr.name.endsWith(':embed') ||
+                    attr.name.endsWith(':link') ||
+                    attr.localName === 'embed')
+                ) {
+                  if (attr.value) usedEmbedIds.add(attr.value);
+                }
               }
             }
           }
-        }
 
-        const dRelsToRemove: any[] = [];
-        for (let i = 0; i < dRelsNodes.length; i++) {
-          const r = dRelsNodes[i];
-          const relId = r?.getAttribute('Id') || r?.getAttribute('id') || '';
-          if (relId && !usedEmbedIds.has(relId)) {
-            dRelsToRemove.push(r);
+          const dRelsToRemove: any[] = [];
+          for (let i = 0; i < dRelsNodes.length; i++) {
+            const r = dRelsNodes[i];
+            const relId = r?.getAttribute('Id') || r?.getAttribute('id') || '';
+            if (relId && !usedEmbedIds.has(relId)) {
+              dRelsToRemove.push(r);
+            }
           }
+          dRelsToRemove.forEach((r) => {
+            if (r && r.parentNode) r.parentNode.removeChild(r);
+          });
+          zip.file(drawingRelsPath, serializer.serializeToString(dRelsDom));
+        } catch (err) {
+          console.warn(`Could not prune drawing rels in ${drawingRelsPath}:`, err);
         }
-        dRelsToRemove.forEach((r) => {
-          if (r && r.parentNode) r.parentNode.removeChild(r);
-        });
-        zip.file(drawingRelsPath, serializer.serializeToString(dRelsDom));
-      } catch (err) {
-        console.warn(`Could not prune drawing rels in ${drawingRelsPath}:`, err);
       }
     }
   }
@@ -1978,6 +2049,7 @@ async function processWorkbookWithZip(
 
       if (allSheets.length > 1 && targetSheetRelId) {
         // Remove other sheets from workbook.xml
+        let targetSheetName = '';
         for (const s of allSheets) {
           const sEl = s as any;
           const rId = sEl.getAttribute('r:id') || sEl.getAttribute('id');
@@ -1985,6 +2057,7 @@ async function processWorkbookWithZip(
             if (sEl.parentNode) sEl.parentNode.removeChild(sEl);
           } else {
             sEl.setAttribute('sheetId', '1');
+            targetSheetName = sEl.getAttribute('name') || '';
           }
         }
 
@@ -2000,6 +2073,30 @@ async function processWorkbookWithZip(
         wbRelsToRemove.forEach((r) => {
           if (r && r.parentNode) r.parentNode.removeChild(r);
         });
+
+        // Clean definedNames referencing removed sheets or containing #REF!
+        const defNamesNodes = wbDom.getElementsByTagName('definedNames');
+        for (let i = 0; i < defNamesNodes.length; i++) {
+          const dnContainer = defNamesNodes.item(i);
+          if (dnContainer) {
+            const dnList = Array.from(dnContainer.getElementsByTagName('definedName'));
+            dnList.forEach((dn: any) => {
+              const text = dn.textContent || '';
+              if (
+                text.includes('#REF!') ||
+                (targetSheetName &&
+                  !text.includes(`'${targetSheetName}'!`) &&
+                  !text.includes(`${targetSheetName}!`) &&
+                  text.includes('!'))
+              ) {
+                if (dn.parentNode) dn.parentNode.removeChild(dn);
+              }
+            });
+            if (dnContainer.getElementsByTagName('definedName').length === 0 && dnContainer.parentNode) {
+              dnContainer.parentNode.removeChild(dnContainer);
+            }
+          }
+        }
 
         // Save updated workbook.xml and workbook.xml.rels
         zip.file('xl/workbook.xml', serializer.serializeToString(wbDom));
@@ -2101,21 +2198,37 @@ async function processWorkbookWithZip(
     console.warn('Could not clean [Content_Types].xml:', err);
   }
 
-  // 18. Ensure all remaining worksheets in the workbook have view and cursor positioned at cell A1
+  // 18. Ensure all remaining worksheets in the workbook have view and cursor positioned at cell A1, sanitized pageSetup, and strictly compliant OpenXML schema order
   for (const filename of Object.keys(zip.files)) {
     if (filename.startsWith('xl/worksheets/sheet') && filename.endsWith('.xml')) {
       try {
         const otherSheetXml = await zip.files[filename].async('string');
         const otherDom = parser.parseFromString(otherSheetXml, 'text/xml');
         resetSheetViewCursorToA1(otherDom);
+
+        // Sanitize pageSetup and remove invalid printerSettings to prevent XML repair warnings in Excel
+        const pageSetupNodes = Array.from(otherDom.getElementsByTagName('pageSetup'));
+        pageSetupNodes.forEach((ps: any) => {
+          ps.setAttribute('orientation', 'portrait');
+          ps.setAttribute('scale', '100');
+          if (ps.hasAttribute('horizontalDpi')) ps.removeAttribute('horizontalDpi');
+          if (ps.hasAttribute('verticalDpi')) ps.removeAttribute('verticalDpi');
+        });
+
+        const printerSettingsNodes = Array.from(otherDom.getElementsByTagName('printerSettings'));
+        printerSettingsNodes.forEach((ps: any) => {
+          if (ps.parentNode) ps.parentNode.removeChild(ps);
+        });
+
+        enforceWorksheetSchemaOrder(otherDom);
         zip.file(filename, serializer.serializeToString(otherDom));
       } catch (err) {
-        console.warn(`Could not reset cursor in ${filename}:`, err);
+        console.warn(`Could not sanitize worksheet ${filename}:`, err);
       }
     }
   }
 
-  // Output new zip buffer directly (fully compliant OpenXML with all drawings, styles, XML relationships, and views preserved)
+  // Output new zip buffer directly (fully compliant OpenXML with all drawings, styles, images, extents, XML relationships, and views preserved 100% intact)
   const outBuf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 
   return {
@@ -2132,14 +2245,79 @@ async function processWorkbookWithZip(
   };
 }
 
+const WORKSHEET_TAG_ORDER = [
+  'sheetPr',
+  'dimension',
+  'sheetViews',
+  'sheetFormatPr',
+  'cols',
+  'sheetData',
+  'sheetCalcPr',
+  'sheetProtection',
+  'protectedRanges',
+  'scenarios',
+  'autoFilter',
+  'sortState',
+  'dataConsolidate',
+  'customSheetViews',
+  'mergeCells',
+  'phoneticPr',
+  'conditionalFormatting',
+  'dataValidations',
+  'hyperlinks',
+  'printOptions',
+  'pageMargins',
+  'pageSetup',
+  'headerFooter',
+  'rowBreaks',
+  'colBreaks',
+  'customProperties',
+  'cellWatches',
+  'ignoredErrors',
+  'smartTags',
+  'drawing',
+  'drawingHF',
+  'picture',
+  'oleObjects',
+  'controls',
+  'webPublishItems',
+  'tableParts',
+  'extLst',
+];
+
+function enforceWorksheetSchemaOrder(sheetDom: any) {
+  const root = sheetDom?.documentElement;
+  if (!root) return;
+
+  const children = Array.from(root.childNodes).filter((n: any) => n.nodeType === 1);
+  const tagRank = (node: any) => {
+    const name = node.localName || node.nodeName?.replace(/^.*:/, '') || '';
+    const idx = WORKSHEET_TAG_ORDER.indexOf(name);
+    return idx === -1 ? 999 : idx;
+  };
+
+  children.sort((a: any, b: any) => tagRank(a) - tagRank(b));
+
+  while (root.firstChild) {
+    root.removeChild(root.firstChild);
+  }
+
+  for (const c of children) {
+    root.appendChild(c);
+  }
+}
+
 function resetSheetViewCursorToA1(doc: any) {
   const ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
   let sheetViews = doc.getElementsByTagName('sheetViews').item(0) || doc.getElementsByTagNameNS('*', 'sheetViews').item(0);
   if (!sheetViews) {
     sheetViews = doc.createElementNS(ns, 'sheetViews');
+    const sheetFormatPr = doc.getElementsByTagName('sheetFormatPr').item(0) || doc.getElementsByTagNameNS('*', 'sheetFormatPr').item(0);
+    const cols = doc.getElementsByTagName('cols').item(0) || doc.getElementsByTagNameNS('*', 'cols').item(0);
     const sheetData = doc.getElementsByTagName('sheetData').item(0) || doc.getElementsByTagNameNS('*', 'sheetData').item(0);
-    if (sheetData && sheetData.parentNode) {
-      sheetData.parentNode.insertBefore(sheetViews, sheetData);
+    const refNode = sheetFormatPr || cols || sheetData;
+    if (refNode && refNode.parentNode) {
+      refNode.parentNode.insertBefore(sheetViews, refNode);
     } else if (doc.documentElement) {
       doc.documentElement.insertBefore(sheetViews, doc.documentElement.firstChild);
     }
@@ -2225,38 +2403,100 @@ function extractCleanRodoviaName(rodovia: string | null | undefined): string {
 }
 
 function getAreaIdentifier(featureType: string, sheetName?: string): string | null {
-  switch (featureType) {
-    case 'drenagem_superficial':
-      return '_DrenSuperficial_';
-    case 'drenagem_profunda':
-      return '_DrenProfunda_';
-    case 'sinalizacao_horizontal_dispositivo':
-      return '_SinHoriz_Dispositivo_';
-    case 'sinalizacao_horizontal_marca_viaria':
-      return '_SinHoriz_MarcaViaria_';
-    case 'sinalizacao_horizontal_zebrado':
-      return '_SinHoriz_Zebrado_';
-    case 'sinalizacao_vertical':
-      return '_SinVertical_';
-    case 'eps_defensa': {
-      const s = (sheetName || '')
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '');
-      if (s.includes('barreira') || s.includes('concreto')) {
-        return '_EPS_BarrConcreto_';
-      }
-      if (s.includes('metalica')) {
-        return '_EPS_DefensaMetalica_';
-      }
-      if (s.includes('oea') || s.includes('oae')) {
-        return '_EPS_Defensa OEA_';
-      }
-      return '_EPS_Defensa_';
-    }
-    default:
-      return null;
+  const normFeature = (featureType || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+
+  const s = (sheetName || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+
+  // 1. Sinalização Horizontal - Marca Viária
+  if (
+    normFeature === 'sinalizacao_horizontal_marca_viaria' ||
+    normFeature.includes('marca_viaria') ||
+    normFeature.includes('marcas_viarias') ||
+    normFeature.includes('marca viaria') ||
+    normFeature.includes('marcas viarias') ||
+    normFeature.includes('sh_marca') ||
+    normFeature === 'marca_viaria' ||
+    s.includes('marca')
+  ) {
+    return '_SinHoriz_MarcaViaria_';
   }
+
+  // 2. Sinalização Horizontal - Dispositivo
+  if (
+    normFeature === 'sinalizacao_horizontal_dispositivo' ||
+    normFeature.includes('dispositivo') ||
+    normFeature.includes('sh_disp') ||
+    s.includes('disp')
+  ) {
+    return '_SinHoriz_Dispositivo_';
+  }
+
+  // 3. Sinalização Horizontal - Zebrado
+  if (
+    normFeature === 'sinalizacao_horizontal_zebrado' ||
+    normFeature.includes('zebrado') ||
+    normFeature.includes('sh_zeb') ||
+    s.includes('zeb')
+  ) {
+    return '_SinHoriz_Zebrado_';
+  }
+
+  // 4. Sinalização Vertical
+  if (
+    normFeature === 'sinalizacao_vertical' ||
+    normFeature.includes('vertical') ||
+    s.includes('vertical')
+  ) {
+    return '_SinVertical_';
+  }
+
+  // 5. Drenagem Superficial
+  if (
+    normFeature === 'drenagem_superficial' ||
+    normFeature.includes('superficial') ||
+    s.includes('superficial')
+  ) {
+    return '_DrenSuperficial_';
+  }
+
+  // 6. Drenagem Profunda
+  if (
+    normFeature === 'drenagem_profunda' ||
+    normFeature.includes('profunda') ||
+    s.includes('profunda')
+  ) {
+    return '_DrenProfunda_';
+  }
+
+  // 7. EPS Defensa
+  if (
+    normFeature === 'eps_defensa' ||
+    normFeature.includes('defensa') ||
+    normFeature.includes('eps') ||
+    s.includes('defensa') ||
+    s.includes('barreira')
+  ) {
+    if (s.includes('barreira') || s.includes('concreto')) {
+      return '_EPS_BarrConcreto_';
+    }
+    if (s.includes('metalica')) {
+      return '_EPS_DefensaMetalica_';
+    }
+    if (s.includes('oea') || s.includes('oae')) {
+      return '_EPS_Defensa OEA_';
+    }
+    return '_EPS_Defensa_';
+  }
+
+  return null;
 }
 
 function buildStandardFileName(params: {
@@ -2340,7 +2580,21 @@ app.post('/api/process', async (req, res) => {
     });
   }
 
-  const fileInfo = uploadedFiles.get(fileId);
+  let fileInfo = uploadedFiles.get(fileId);
+  if (!fileInfo) {
+    const directPath = path.join(UPLOAD_DIR, fileId);
+    if (fs.existsSync(directPath)) {
+      const stat = fs.statSync(directPath);
+      fileInfo = {
+        fileId,
+        filePath: directPath,
+        originalName: fileId,
+        fileSize: stat.size,
+        uploadedAt: Date.now(),
+        sheetNames: [sheetName],
+      };
+    }
+  }
   if (!fileInfo || !fs.existsSync(fileInfo.filePath)) {
     return res.status(404).json({ error: 'Arquivo original não encontrado ou sessão expirada.' });
   }
@@ -2503,38 +2757,66 @@ function getWorkbookStream(buf: Buffer): Buffer {
 
   const sectorSize = 1 << buf.readUInt16LE(30);
   const miniSectorSize = 1 << buf.readUInt16LE(32);
+  const fatSectorsCount = buf.readUInt32LE(44);
   const dirStartSector = buf.readUInt32LE(48);
-  const miniFatStartSec = buf.readUInt32LE(60);
   const minSizeStandardStream = buf.readUInt32LE(56);
+  const miniFatStartSec = buf.readUInt32LE(60);
+  const difatFirstSec = buf.readUInt32LE(68);
 
-  const difatSectors: number[] = [];
-  for (let i = 0; i < 109; i++) {
+  // 1. Read first 109 FAT sector indices from header
+  const fatSectorIndices: number[] = [];
+  for (let i = 0; i < Math.min(fatSectorsCount, 109); i++) {
     const s = buf.readUInt32LE(76 + i * 4);
-    if (s < 0xFFFFFFFC) difatSectors.push(s);
+    if (s < 0xFFFFFFFC) fatSectorIndices.push(s);
   }
 
-  const fat: number[] = [];
-  for (const fSec of difatSectors) {
-    const offset = (fSec + 1) * sectorSize;
-    if (offset + sectorSize > buf.length) break;
-    for (let i = 0; i < sectorSize; i += 4) {
-      fat.push(buf.readUInt32LE(offset + i));
+  // 2. Read remaining FAT sector indices from DIFAT chain if needed (>109 FAT sectors)
+  if (fatSectorsCount > 109 && difatFirstSec < 0xFFFFFFFC) {
+    let curDifatSec = difatFirstSec;
+    const visitedDifat = new Set<number>();
+    while (curDifatSec < 0xFFFFFFFC && !visitedDifat.has(curDifatSec) && fatSectorIndices.length < fatSectorsCount) {
+      visitedDifat.add(curDifatSec);
+      const difatOffset = (curDifatSec + 1) * sectorSize;
+      if (difatOffset + sectorSize > buf.length) break;
+      const entriesPerDifatSec = (sectorSize / 4) - 1;
+      for (let i = 0; i < entriesPerDifatSec; i++) {
+        if (fatSectorIndices.length >= fatSectorsCount) break;
+        const fatSec = buf.readUInt32LE(difatOffset + i * 4);
+        if (fatSec < 0xFFFFFFFC) {
+          fatSectorIndices.push(fatSec);
+        }
+      }
+      curDifatSec = buf.readUInt32LE(difatOffset + entriesPerDifatSec * 4);
     }
   }
 
-  let dirBuf = Buffer.alloc(0);
+  // 3. Build FAT table
+  const fat = new Uint32Array(fatSectorIndices.length * (sectorSize / 4));
+  let fatIdx = 0;
+  for (const sec of fatSectorIndices) {
+    const offset = (sec + 1) * sectorSize;
+    if (offset + sectorSize <= buf.length) {
+      for (let j = 0; j < sectorSize; j += 4) {
+        fat[fatIdx++] = buf.readUInt32LE(offset + j);
+      }
+    }
+  }
+
+  // 4. Read directory sectors
+  const dirChunks: Buffer[] = [];
   let sec = dirStartSector;
-  const visitedDir = new Set();
+  const visitedDir = new Set<number>();
   while (sec < 0xFFFFFFFC && !visitedDir.has(sec)) {
     visitedDir.add(sec);
     const offset = (sec + 1) * sectorSize;
     if (offset + sectorSize > buf.length) break;
-    dirBuf = Buffer.concat([dirBuf, buf.subarray(offset, offset + sectorSize)]);
+    dirChunks.push(buf.subarray(offset, offset + sectorSize));
     sec = fat[sec] !== undefined ? fat[sec] : 0xFFFFFFFF;
   }
+  const dirBuf = Buffer.concat(dirChunks);
 
-  let workbookEntry = null;
-  let rootEntry = null;
+  let workbookEntry: { startSec: number; size: number } | null = null;
+  let rootEntry: { startSec: number; size: number } | null = null;
   for (let i = 0; i < dirBuf.length; i += 128) {
     const entry = dirBuf.subarray(i, i + 128);
     if (entry.length < 128) break;
@@ -2542,16 +2824,16 @@ function getWorkbookStream(buf: Buffer): Buffer {
     if (nameLen === 0) continue;
     const name = entry.toString("utf16le", 0, nameLen - 2);
     const startSec = entry.readUInt32LE(116);
-    const size = entry.readUInt32LE(120);
+    const size = Number(entry.readUInt32LE(120));
     if (name === "Root Entry") rootEntry = { startSec, size };
     else if (name === "Workbook" || name === "Book") workbookEntry = { startSec, size };
   }
 
   if (!workbookEntry) return buf;
 
-  const miniFat = [];
+  const miniFat: number[] = [];
   sec = miniFatStartSec;
-  const visitedMiniFat = new Set();
+  const visitedMiniFat = new Set<number>();
   while (sec < 0xFFFFFFFC && !visitedMiniFat.has(sec)) {
     visitedMiniFat.add(sec);
     const offset = (sec + 1) * sectorSize;
@@ -2564,40 +2846,50 @@ function getWorkbookStream(buf: Buffer): Buffer {
 
   let miniStream = Buffer.alloc(0);
   if (rootEntry) {
+    const rootChunks: Buffer[] = [];
     sec = rootEntry.startSec;
-    const visitedRoot = new Set();
+    const visitedRoot = new Set<number>();
     while (sec < 0xFFFFFFFC && !visitedRoot.has(sec)) {
       visitedRoot.add(sec);
       const offset = (sec + 1) * sectorSize;
       if (offset + sectorSize > buf.length) break;
-      miniStream = Buffer.concat([miniStream, buf.subarray(offset, offset + sectorSize)]);
+      rootChunks.push(buf.subarray(offset, offset + sectorSize));
       sec = fat[sec] !== undefined ? fat[sec] : 0xFFFFFFFF;
     }
+    miniStream = Buffer.concat(rootChunks);
   }
 
-  let streamBuf = Buffer.alloc(0);
   if (workbookEntry.size < minSizeStandardStream) {
+    const streamBuf = Buffer.alloc(workbookEntry.size);
+    let destOffset = 0;
     sec = workbookEntry.startSec;
-    const visitedStream = new Set();
-    while (sec < 0xFFFFFFFC && !visitedStream.has(sec)) {
+    const visitedStream = new Set<number>();
+    while (sec < 0xFFFFFFFC && !visitedStream.has(sec) && destOffset < workbookEntry.size) {
       visitedStream.add(sec);
       const offset = sec * miniSectorSize;
       if (offset + miniSectorSize > miniStream.length) break;
-      streamBuf = Buffer.concat([streamBuf, miniStream.subarray(offset, offset + miniSectorSize)]);
+      const bytesToCopy = Math.min(miniSectorSize, workbookEntry.size - destOffset);
+      miniStream.copy(streamBuf, destOffset, offset, offset + bytesToCopy);
+      destOffset += bytesToCopy;
       sec = miniFat[sec] !== undefined ? miniFat[sec] : 0xFFFFFFFF;
     }
+    return streamBuf.subarray(0, destOffset);
   } else {
+    const streamBuf = Buffer.alloc(workbookEntry.size);
+    let destOffset = 0;
     sec = workbookEntry.startSec;
-    const visitedStream = new Set();
-    while (sec < 0xFFFFFFFC && !visitedStream.has(sec)) {
+    const visitedStream = new Set<number>();
+    while (sec < 0xFFFFFFFC && !visitedStream.has(sec) && destOffset < workbookEntry.size) {
       visitedStream.add(sec);
       const offset = (sec + 1) * sectorSize;
       if (offset + sectorSize > buf.length) break;
-      streamBuf = Buffer.concat([streamBuf, buf.subarray(offset, offset + sectorSize)]);
+      const bytesToCopy = Math.min(sectorSize, workbookEntry.size - destOffset);
+      buf.copy(streamBuf, destOffset, offset, offset + bytesToCopy);
+      destOffset += bytesToCopy;
       sec = fat[sec] !== undefined ? fat[sec] : 0xFFFFFFFF;
     }
+    return streamBuf.subarray(0, destOffset);
   }
-  return streamBuf.subarray(0, workbookEntry.size);
 }
 
 async function extractImagesFromBuffer(buf: Buffer): Promise<ExtractedRawImage[]> {
@@ -2805,6 +3097,109 @@ function extractAnchorsFromBiff8(buf: Buffer): { col1: number; row1: number; col
   return anchors;
 }
 
+function parseBiffBlipsAndShapes(fileBuf: Buffer) {
+  const wbStream = getWorkbookStream(fileBuf);
+  let pos = 0;
+  const drawingGroupPayloads: Buffer[] = [];
+  while (pos < wbStream.length - 4) {
+    const type = wbStream.readUInt16LE(pos);
+    const len = wbStream.readUInt16LE(pos + 2);
+    pos += 4;
+    if (pos + len > wbStream.length) break;
+    const payload = wbStream.subarray(pos, pos + len);
+    pos += len;
+    if (type === 0x00EB) drawingGroupPayloads.push(payload);
+    else if (type === 0x003C && drawingGroupPayloads.length > 0) {
+      drawingGroupPayloads.push(payload);
+    }
+  }
+  const dgStream = Buffer.concat(drawingGroupPayloads);
+
+  // Extract BSE blips (1-indexed)
+  let p = 0;
+  const blips: ({ format: 'jpeg' | 'png'; buffer: Buffer } | null)[] = [];
+  while (p < dgStream.length - 8) {
+    const type = dgStream.readUInt16LE(p + 2);
+    const len = dgStream.readUInt32LE(p + 4);
+    if (type === 0xF007) {
+      const bsePayload = dgStream.subarray(p + 8, p + 8 + len);
+      let jpegStart = -1;
+      for (let j = 0; j < bsePayload.length - 3; j++) {
+        if (bsePayload[j] === 0xFF && bsePayload[j + 1] === 0xD8 && bsePayload[j + 2] === 0xFF) {
+          jpegStart = j;
+          break;
+        }
+      }
+      let pngStart = -1;
+      if (jpegStart === -1) {
+        for (let j = 0; j < bsePayload.length - 8; j++) {
+          if (
+            bsePayload[j] === 0x89 &&
+            bsePayload[j + 1] === 0x50 &&
+            bsePayload[j + 2] === 0x4E &&
+            bsePayload[j + 3] === 0x47
+          ) {
+            pngStart = j;
+            break;
+          }
+        }
+      }
+      if (jpegStart !== -1) {
+        blips.push({ format: 'jpeg', buffer: bsePayload.subarray(jpegStart) });
+      } else if (pngStart !== -1) {
+        blips.push({ format: 'png', buffer: bsePayload.subarray(pngStart) });
+      } else {
+        blips.push(null);
+      }
+      p += 8 + len;
+      continue;
+    }
+    p++;
+  }
+
+  // Extract shape records with ClientAnchor (0xF010) and Opt (0xF00B)
+  const shapes: { col1: number; row1: number; col2: number; row2: number; pib: number | null; filename: string | null }[] = [];
+  for (let i = 0; i < fileBuf.length - 26; i++) {
+    if (fileBuf[i + 2] === 0x10 && fileBuf[i + 3] === 0xF0) {
+      const recLen = fileBuf.readUInt32LE(i + 4);
+      if (recLen >= 18 && i + 8 + recLen <= fileBuf.length) {
+        const col1 = fileBuf.readUInt16LE(i + 10);
+        const row1 = fileBuf.readUInt16LE(i + 14);
+        const col2 = fileBuf.readUInt16LE(i + 18);
+        const row2 = fileBuf.readUInt16LE(i + 22);
+
+        if (row1 >= 1 && row1 < 30000 && col1 >= 0 && col1 < 300) {
+          let pib: number | null = null;
+          let filename: string | null = null;
+          const lookback = fileBuf.subarray(Math.max(0, i - 600), i);
+          for (let j = lookback.length - 8; j >= 0; j--) {
+            if (lookback[j + 2] === 0x0B && lookback[j + 3] === 0xF0) {
+              const numProps = lookback.readUInt16LE(j) >> 4;
+              const optLen = lookback.readUInt32LE(j + 4);
+              let off = j + 8;
+              for (let pr = 0; pr < numProps && off + 6 <= j + 8 + optLen && off + 6 <= lookback.length; pr++) {
+                const pid = lookback.readUInt16LE(off);
+                const val = lookback.readUInt32LE(off + 2);
+                if ((pid & 0x3FFF) === 0x0104) {
+                  pib = val;
+                }
+                off += 6;
+              }
+              const text = lookback.subarray(j + 8).toString('utf16le');
+              const m = text.match(/([A-Za-z0-9_\+\-]+\.jpg)/i);
+              if (m) filename = m[1];
+              break;
+            }
+          }
+          shapes.push({ col1, row1, col2, row2, pib, filename });
+        }
+      }
+    }
+  }
+
+  return { blips, shapes };
+}
+
 function formatWorksheetLayout(ws: ExcelJS.Worksheet) {
   if (!ws || ws.rowCount === 0) return;
 
@@ -2945,12 +3340,13 @@ function formatWorksheetLayout(ws: ExcelJS.Worksheet) {
 async function convertXlsToXlsxWithImages(xlsPath: string, outputPath: string) {
   try {
     const fileBuf = fs.readFileSync(xlsPath);
+    const { blips, shapes } = parseBiffBlipsAndShapes(fileBuf);
     const extractedImages = await extractImagesFromBuffer(fileBuf);
     const biffAnchors = extractAnchorsFromBiff8(fileBuf);
 
     const xlsWorkbook = XLSX.readFile(xlsPath, { cellDates: true, raw: false });
 
-    if (extractedImages.length === 0) {
+    if (blips.length === 0 && extractedImages.length === 0) {
       XLSX.writeFile(xlsWorkbook, outputPath, { bookType: 'xlsx' });
       return;
     }
@@ -2966,12 +3362,23 @@ async function convertXlsToXlsxWithImages(xlsPath: string, outputPath: string) {
 
       if (rawRows.length === 0) continue;
 
+      const isNumSeq = rawRows.length > 1 && isNumericSequenceRow(rawRows[0], rawRows[1]);
+      const headerRowIdx = isNumSeq ? 1 : 0;
+      if (rawRows[headerRowIdx]) {
+        rawRows[headerRowIdx] = rawRows[headerRowIdx].map((h: any) => {
+          const s = String(h || '').trim();
+          if (s.toLowerCase() === 'kmlegenda' || s.toLowerCase() === 'km_legenda') {
+            return 'km';
+          }
+          return h;
+        });
+      }
+
       rawRows.forEach((rowVals) => {
         ws.addRow(rowVals);
       });
 
       // Identify photo columns
-      const isNumSeq = rawRows.length > 1 && isNumericSequenceRow(rawRows[0], rawRows[1]);
       const headerRow = (isNumSeq ? rawRows[1] : rawRows[0]) || [];
       const photoColIndices: number[] = [];
 
@@ -2988,11 +3395,104 @@ async function convertXlsToXlsxWithImages(xlsPath: string, outputPath: string) {
         }
       });
 
-      // If we have BIFF8 ClientAnchors mapping 1-to-1 to extracted images, embed images at exact cell coordinates
-      if (biffAnchors.length > 0) {
+      const photoColIndicesSet = new Set(photoColIndices);
+      const placedCells = new Set<string>();
+
+      // 1. Primary accurate method: Use BIFF8 Escher shape-to-blip mapping (pib -> BSE blip)
+      const validShapes = shapes.filter(
+        (s) => s.pib && blips[s.pib - 1] && (photoColIndicesSet.size === 0 || photoColIndicesSet.has(s.col1))
+      );
+
+      for (const shape of validShapes) {
+        const cellKey = `${shape.col1}_${shape.row1}`;
+        if (placedCells.has(cellKey)) continue;
+        const imgItem = blips[shape.pib! - 1];
+        if (!imgItem) continue;
+
+        try {
+          const imageId = wb.addImage({
+            buffer: imgItem.buffer,
+            extension: imgItem.format,
+          });
+
+          ws.addImage(imageId, {
+            tl: { col: shape.col1, row: shape.row1 },
+            ext: { width: 120, height: 90 },
+            editAs: 'oneCell',
+          });
+          placedCells.add(cellKey);
+        } catch (addErr) {
+          console.warn(`Error adding image to cell R${shape.row1}C${shape.col1}:`, addErr);
+        }
+      }
+
+      // 2. Secondary method: Filename matching against cell text or shape filename
+      if (photoColIndices.length > 0) {
+        const remainingCells: { row: number; col: number; text: string }[] = [];
+        for (let r = 1; r < rawRows.length; r++) {
+          const rowVals = rawRows[r] || [];
+          for (const colIdx of photoColIndices) {
+            const cellKey = `${colIdx}_${r}`;
+            if (placedCells.has(cellKey)) continue;
+            const val = String(rowVals[colIdx] || '').trim();
+            if (val) {
+              remainingCells.push({ row: r, col: colIdx, text: val });
+            }
+          }
+        }
+
+        if (remainingCells.length > 0 && extractedImages.length > 0) {
+          const usedImgIndices = new Set<number>();
+          remainingCells.forEach((pCell) => {
+            const cellKey = `${pCell.col}_${pCell.row}`;
+            if (placedCells.has(cellKey)) return;
+
+            let matchedImgIdx = -1;
+            const cleanVal = cleanImageKey(pCell.text);
+            const baseVal = cleanImageKey(path.basename(pCell.text));
+
+            for (let i = 0; i < extractedImages.length; i++) {
+              if (usedImgIndices.has(i)) continue;
+              const img = extractedImages[i];
+              if (img.nameKey) {
+                if (
+                  cleanVal.includes(img.nameKey) ||
+                  img.nameKey.includes(cleanVal) ||
+                  baseVal.includes(img.nameKey) ||
+                  img.nameKey.includes(baseVal)
+                ) {
+                  matchedImgIdx = i;
+                  break;
+                }
+              }
+            }
+
+            if (matchedImgIdx >= 0 && matchedImgIdx < extractedImages.length) {
+              usedImgIndices.add(matchedImgIdx);
+              const imgItem = extractedImages[matchedImgIdx];
+              try {
+                const imageId = wb.addImage({
+                  buffer: imgItem.buffer,
+                  extension: imgItem.format === 'PNG' ? 'png' : 'jpeg',
+                });
+                ws.addImage(imageId, {
+                  tl: { col: pCell.col, row: pCell.row },
+                  ext: { width: 120, height: 90 },
+                  editAs: 'oneCell',
+                });
+                placedCells.add(cellKey);
+              } catch (addErr) {
+                console.warn(`Error adding image to cell R${pCell.row}C${pCell.col}:`, addErr);
+              }
+            }
+          });
+        }
+      }
+
+      // 3. Fallback method: if no shapes were matched, use sorted anchors with extractedImages
+      if (placedCells.size === 0 && biffAnchors.length > 0 && extractedImages.length > 0) {
         let finalAnchors = biffAnchors;
         if (photoColIndices.length > 0) {
-          const photoColIndicesSet = new Set(photoColIndices);
           finalAnchors = biffAnchors
             .filter((a) => photoColIndicesSet.has(a.col1) && a.row1 >= 1)
             .sort((a, b) => {
@@ -3017,68 +3517,18 @@ async function convertXlsToXlsxWithImages(xlsPath: string, outputPath: string) {
               editAs: 'oneCell',
             });
           } catch (addErr) {
-            console.warn(`Error adding image ${i} to anchor R${anchor.row1}C${anchor.col1}:`, addErr);
+            console.warn(`Error adding fallback image ${i}:`, addErr);
           }
-        }
-      } else {
-        // Fallback: match by photo columns or text
-        if (photoColIndices.length > 0) {
-          const photoCells: { row: number; col: number; text: string }[] = [];
-          for (let r = 2; r <= rawRows.length; r++) {
-            const rowVals = rawRows[r - 1] || [];
-            for (const colIdx of photoColIndices) {
-              const val = String(rowVals[colIdx] || '').trim();
-              photoCells.push({ row: r, col: colIdx + 1, text: val });
-            }
-          }
-
-          const usedImgIndices = new Set<number>();
-          photoCells.forEach((pCell) => {
-            let matchedImgIdx = -1;
-            if (pCell.text) {
-              const cleanVal = cleanImageKey(pCell.text);
-              const baseVal = cleanImageKey(path.basename(pCell.text));
-              for (let i = 0; i < extractedImages.length; i++) {
-                if (usedImgIndices.has(i)) continue;
-                const img = extractedImages[i];
-                if (img.nameKey) {
-                  if (
-                    cleanVal.includes(img.nameKey) ||
-                    img.nameKey.includes(cleanVal) ||
-                    baseVal.includes(img.nameKey) ||
-                    img.nameKey.includes(baseVal)
-                  ) {
-                    matchedImgIdx = i;
-                    break;
-                  }
-                }
-              }
-            }
-
-            if (matchedImgIdx >= 0 && matchedImgIdx < extractedImages.length) {
-              usedImgIndices.add(matchedImgIdx);
-              const imgItem = extractedImages[matchedImgIdx];
-              try {
-                const imageId = wb.addImage({
-                  buffer: imgItem.buffer,
-                  extension: imgItem.format === 'PNG' ? 'png' : 'jpeg',
-                });
-                ws.addImage(imageId, {
-                  tl: { col: pCell.col - 1, row: pCell.row - 1 },
-                  ext: { width: 120, height: 90 },
-                  editAs: 'oneCell',
-                });
-              } catch (addErr) {
-                console.warn(`Error adding image to cell R${pCell.row}C${pCell.col}:`, addErr);
-              }
-            }
-          });
         }
       }
     }
 
     wb.worksheets.forEach((ws) => {
       formatWorksheetLayout(ws);
+      ws.pageSetup = {
+        orientation: 'portrait',
+        scale: 100,
+      };
     });
 
     await wb.xlsx.writeFile(outputPath);
@@ -3592,9 +4042,11 @@ app.get('/api/download-pdf/:downloadId', async (req, res) => {
         doc.setFont('helvetica', 'normal');
         doc.setTextColor(100, 116, 139);
 
+        const cleanOriginalFileName = fixFileNameEncoding(processedInfo.originalFileName || '');
+        const cleanSheetName = fixFileNameEncoding(processedInfo.sheetName || '');
         let filterText = '';
-        if (processedInfo.sheetName) {
-          filterText += ` • Aba: ${processedInfo.sheetName}`;
+        if (cleanSheetName) {
+          filterText += ` • Aba: ${cleanSheetName}`;
         }
         if (processedInfo.appliedRodoviaFilter) {
           filterText += ` • Rodovia: ${processedInfo.appliedRodoviaFilter}`;
@@ -3612,7 +4064,7 @@ app.get('/api/download-pdf/:downloadId', async (req, res) => {
         }
 
         const countDisplay = dataRows[0]?.[0]?.includes('Nenhum registro') ? 0 : dataRows.length;
-        const subtitle = `Arquivo: ${processedInfo.originalFileName} • Total: ${countDisplay.toLocaleString('pt-BR')} registros${filterText}`;
+        const subtitle = `Arquivo: ${cleanOriginalFileName} • Total: ${countDisplay.toLocaleString('pt-BR')} registros${filterText}`;
         doc.text(subtitle, 23.5, 13.5);
 
         doc.setDrawColor(103, 186, 123);
@@ -3633,7 +4085,7 @@ app.get('/api/download-pdf/:downloadId', async (req, res) => {
       doc.line(6, 201, 291, 201);
 
       doc.text(
-        `EPR Paraná • Sistema de Padronização de Drenagem • Gerado em ${new Date().toLocaleString('pt-BR')}`,
+        `EPR Paraná • Sistema de Padronização e Limpeza de Planilhas • Gerado em ${new Date().toLocaleString('pt-BR')}`,
         6,
         205.5
       );

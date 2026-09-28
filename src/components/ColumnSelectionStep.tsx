@@ -240,10 +240,10 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
   const estadoColInfo = useMemo(() => {
     return sheetDetails.columns.find((col) => {
       const norm = normalizeColKey(col.name);
-      if (
-        featureType === 'sinalizacao_horizontal_dispositivo' ||
-        featureType === 'sinalizacao_horizontal_zebrado'
-      ) {
+      if (featureType === 'sinalizacao_horizontal_zebrado') {
+        return norm === 'resultadogeral' || norm === 'resultado_geral';
+      }
+      if (featureType === 'sinalizacao_horizontal_dispositivo') {
         return norm === 'resultadogeral' || norm === 'resultado' || norm === 'status';
       }
       if (featureType === 'sinalizacao_horizontal_marca_viaria') {
