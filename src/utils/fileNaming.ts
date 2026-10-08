@@ -122,6 +122,15 @@ export function getAreaIdentifier(
     return '_EPS_Defensa_';
   }
 
+  // 8. Terrapleno
+  if (
+    normFeature === 'terrapleno' ||
+    normFeature.includes('terraplen') ||
+    s.includes('terraplen')
+  ) {
+    return '_Terrapleno_';
+  }
+
   return null;
 }
 

@@ -13,6 +13,7 @@ import {
   Paintbrush,
   Grid3X3,
   Shield,
+  Mountain,
 } from 'lucide-react';
 import { UploadResponse, DrainageFeatureType } from '../types';
 import { DRAINAGE_FEATURES } from '../constants/presets';
@@ -321,6 +322,7 @@ export const UploadStep: React.FC<UploadStepProps> = ({
     { id: 'sinalizacao_horizontal_marca_viaria', name: 'SH - Marca Viária', icon: Paintbrush, cols: 14 },
     { id: 'sinalizacao_horizontal_zebrado', name: 'SH - Zebrado', icon: Grid3X3, cols: 11 },
     { id: 'eps_defensa', name: 'EPS - Defensa', icon: Shield, cols: 13 },
+    { id: 'terrapleno', name: 'Terrapleno', icon: Mountain, cols: 25 },
   ];
 
   return (
@@ -359,7 +361,7 @@ export const UploadStep: React.FC<UploadStepProps> = ({
         </div>
 
         {/* Compact Feature Chips Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-1.5">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-1.5">
           {featuresList.map((feat) => {
             const Icon = feat.icon;
             const isSelected = selectedFeature === feat.id;

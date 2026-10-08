@@ -22,7 +22,9 @@ import {
   isDefaultPresetField,
   normalizeColKey,
   matchesEstadoFilterFrontend,
+  matchesRodoviaFilterFrontend,
   APARENCIA_GERAL_OPTIONS,
+  RISCO_TERRAPLENO_OPTIONS,
   normalizeRodoviaForFeature,
 } from '../constants/presets';
 import { TurboModeModal } from './TurboModeModal';
@@ -143,7 +145,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
     }
   };
 
-  const handleFeatureSwitch = (newFeature: DrainageFeatureType) => {
+  const handleFeatureSwitch = async (newFeature: DrainageFeatureType) => {
     setFeatureType(newFeature);
     if (uploadData) {
       uploadData.featureType = newFeature;
@@ -152,10 +154,34 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
       onFeatureChange(newFeature);
     }
 
-    const matchingIdxs = sheetDetails.columns
-      .filter((col) => isDefaultPresetField(col.name, newFeature))
-      .map((col) => col.index);
-    setSelectedForKeeping(new Set(matchingIdxs));
+    try {
+      setIsLoadingSheet(true);
+      const res = await fetch(
+        `/api/sheet-details/${uploadData.fileId}/${encodeURIComponent(activeSheet)}?featureType=${newFeature}`
+      );
+      if (res.ok) {
+        const newDetails: SheetDetails = await res.json();
+        setSheetDetails(newDetails);
+        const matchingIdxs = newDetails.columns
+          .filter((col) => isDefaultPresetField(col.name, newFeature))
+          .map((col) => col.index);
+        setSelectedForKeeping(new Set(matchingIdxs));
+      } else {
+        const matchingIdxs = sheetDetails.columns
+          .filter((col) => isDefaultPresetField(col.name, newFeature))
+          .map((col) => col.index);
+        setSelectedForKeeping(new Set(matchingIdxs));
+      }
+    } catch {
+      const matchingIdxs = sheetDetails.columns
+        .filter((col) => isDefaultPresetField(col.name, newFeature))
+        .map((col) => col.index);
+      setSelectedForKeeping(new Set(matchingIdxs));
+    } finally {
+      setIsLoadingSheet(false);
+      setEstadoFilter('');
+      setRodoviaFilter('');
+    }
   };
 
   const handleToggleColumn = (colIndex: number) => {
@@ -240,6 +266,16 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
   const estadoColInfo = useMemo(() => {
     return sheetDetails.columns.find((col) => {
       const norm = normalizeColKey(col.name);
+      if (featureType === 'terrapleno') {
+        if (norm === 'situacao' || norm === 'status' || norm === 'situacaoobra') return false;
+        return (
+          norm.includes('risco') ||
+          norm.includes('risk') ||
+          norm.includes('grau') ||
+          norm.includes('classificacao') ||
+          norm.includes('nivel')
+        );
+      }
       if (featureType === 'sinalizacao_horizontal_zebrado') {
         return norm === 'resultadogeral' || norm === 'resultado_geral';
       }
@@ -307,12 +343,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
       }
 
       if (rodoviaFilter) {
-        const normItemRod = normalizeRodoviaForFeature(item.r, featureType);
-        const normFilterRod = normalizeRodoviaForFeature(rodoviaFilter, featureType);
-        matchesRodovia =
-          normalizeColKey(normItemRod) === normalizeColKey(normFilterRod) ||
-          normItemRod === normFilterRod ||
-          normalizeColKey(item.r) === normalizeColKey(rodoviaFilter);
+        matchesRodovia = matchesRodoviaFilterFrontend(item.r, rodoviaFilter, featureType);
       }
 
       return matchesEstado && matchesRodovia;
@@ -325,7 +356,9 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
     featureType === 'sinalizacao_horizontal_zebrado';
 
   const activeStatusOptions =
-    featureType === 'eps_defensa'
+    featureType === 'terrapleno'
+      ? RISCO_TERRAPLENO_OPTIONS
+      : featureType === 'eps_defensa'
       ? APARENCIA_GERAL_OPTIONS
       : isHorizontalFeature
       ? RESULTADO_GERAL_OPTIONS
@@ -437,6 +470,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
             <option value="sinalizacao_horizontal_marca_viaria">SH - Marca Viária</option>
             <option value="sinalizacao_horizontal_zebrado">SH - Zebrado</option>
             <option value="eps_defensa">EPS - Defensa</option>
+            <option value="terrapleno">Terrapleno</option>
           </select>
 
           {/* Parcial selector */}
@@ -586,7 +620,9 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
             <div className="min-w-0 flex-1">
               <div className="text-[11px] font-bold text-slate-800 flex items-center gap-1">
                 <span>
-                  {featureType === 'eps_defensa'
+                  {featureType === 'terrapleno'
+                    ? 'Risco:'
+                    : featureType === 'eps_defensa'
                     ? 'Aparência:'
                     : isHorizontalFeature
                     ? 'Resultado:'

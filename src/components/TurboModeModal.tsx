@@ -17,6 +17,9 @@ import {
   Layers,
   Sparkles,
   ExternalLink,
+  Copy,
+  Check,
+  ClipboardCheck,
 } from 'lucide-react';
 import { DrainageFeatureType, ColumnInfo, RowFilterItem, SheetDetails } from '../types';
 import {
@@ -24,6 +27,7 @@ import {
   isDefaultPresetField,
   normalizeColKey,
   matchesEstadoFilterFrontend,
+  matchesRodoviaFilterFrontend,
   normalizeRodoviaForFeature,
 } from '../constants/presets';
 import { getAreaIdentifier } from '../utils/fileNaming';
@@ -59,6 +63,7 @@ interface RodoviaProcessItem {
   pdfDownloadUrl?: string;
   downloadId?: string;
   errorMessage?: string;
+  keptRowsCount?: number;
 }
 
 /**
@@ -196,7 +201,13 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
     featureType === 'sinalizacao_horizontal_marca_viaria' ||
     featureType === 'sinalizacao_horizontal_zebrado';
   const defaultFilterValue =
-    featureType === 'eps_defensa' ? 'Ruim' : isReprovadoFeature ? 'Reprovado' : 'PRECÁRIO';
+    featureType === 'terrapleno'
+      ? 'R4'
+      : featureType === 'eps_defensa'
+      ? 'Ruim'
+      : isReprovadoFeature
+      ? 'Reprovado'
+      : 'PRECÁRIO';
 
   const [items, setItems] = useState<RodoviaProcessItem[]>([]);
   const [selectedEstadoFilter, setSelectedEstadoFilter] = useState<string>(defaultFilterValue);
@@ -209,6 +220,9 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
   }, [isOpen, featureType, defaultFilterValue]);
   const [isRunning, setIsRunning] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
+  const [showSummary, setShowSummary] = useState(false);
+  const [copiedSummary, setCopiedSummary] = useState(false);
+  const [summaryViewMode, setSummaryViewMode] = useState<'card' | 'text'>('card');
   const [currentProcessingIndex, setCurrentProcessingIndex] = useState<number>(-1);
   const [currentStepText, setCurrentStepText] = useState<string>('');
   const [overallError, setOverallError] = useState<string | null>(null);
@@ -252,7 +266,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
       setIsLoadingTabs(true);
       const newTabsData: Record<string, SheetDetails> = {};
 
-      // Seed current active tab
+      // Seed current active tab fallback
       if (sheetName) {
         newTabsData[sheetName] = {
           headers: [],
@@ -265,27 +279,24 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
         };
       }
 
-      // Fetch other target sheets if multi-tab
-      const missingSheets = targetSheets.filter((tab) => tab !== sheetName);
-      if (missingSheets.length > 0) {
-        await Promise.all(
-          missingSheets.map(async (tab) => {
-            try {
-              const res = await fetch(
-                `/api/sheet-details/${fileId}/${encodeURIComponent(tab)}?featureType=${featureType}`
-              );
-              if (res.ok) {
-                const text = await res.text();
-                const json = JSON.parse(text);
-                const details: SheetDetails = json.sheetDetails || json;
-                newTabsData[tab] = details;
-              }
-            } catch (err) {
-              console.warn(`Could not load details for tab ${tab}:`, err);
+      // Fetch fresh details for all target sheets (including sheetName) to guarantee status column sync
+      await Promise.all(
+        targetSheets.map(async (tab) => {
+          try {
+            const res = await fetch(
+              `/api/sheet-details/${fileId}/${encodeURIComponent(tab)}?featureType=${featureType}`
+            );
+            if (res.ok) {
+              const text = await res.text();
+              const json = JSON.parse(text);
+              const details: SheetDetails = json.sheetDetails || json;
+              newTabsData[tab] = details;
             }
-          })
-        );
-      }
+          } catch (err) {
+            console.warn(`Could not load details for tab ${tab}:`, err);
+          }
+        })
+      );
 
       if (isMounted) {
         setTabsData((prev) => ({ ...prev, ...newTabsData }));
@@ -302,6 +313,9 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
 
   // Extract all unique non-empty status values from rowFiltersData
   const availableStatusOptions = React.useMemo(() => {
+    if (featureType === 'terrapleno') {
+      return ['R4', 'R3', 'R2', 'R1', 'Todos'];
+    }
     if (featureType === 'eps_defensa') {
       return ['Ruim', 'Regular', 'Boa', 'Todos'];
     }
@@ -338,6 +352,8 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
     abortControllerRef.current = false;
     setIsRunning(false);
     setIsFinished(false);
+    setShowSummary(false);
+    setCopiedSummary(false);
     setCurrentProcessingIndex(-1);
     setCurrentStepText('');
     setOverallError(null);
@@ -376,12 +392,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
 
           if (tabRowsData.length > 0) {
             tabRowsData.forEach((row) => {
-              const rowRodNorm = normalizeRodoviaForFeature(row.r, featureType);
-              if (
-                normalizeColKey(rowRodNorm) === normalizeColKey(rod) ||
-                rowRodNorm === rod ||
-                normalizeColKey(row.r) === normalizeColKey(rod)
-              ) {
+              if (matchesRodoviaFilterFrontend(row.r, rod, featureType)) {
                 totalCount++;
                 if (matchesEstadoFilterFrontend(row.e, selectedEstadoFilter)) {
                   precaroCount++;
@@ -462,6 +473,70 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
   const selectedItems = items.filter((it) => it.selected);
   const completedCount = items.filter((it) => it.status === 'completed').length;
   const totalSelectedCount = selectedItems.length;
+
+  const completedItems = items.filter((it) => it.status === 'completed');
+  const summaryItems = completedItems.length > 0 ? completedItems : selectedItems;
+
+  const getItemRowCount = (item: RodoviaProcessItem) => {
+    if (typeof item.keptRowsCount === 'number') {
+      return item.keptRowsCount;
+    }
+    return selectedEstadoFilter.toLowerCase() === 'todos' ? item.totalCount : item.precaroCount;
+  };
+
+  const totalFilteredRecords = summaryItems.reduce((acc, it) => acc + getItemRowCount(it), 0);
+
+  const generateWhatsAppSummaryText = () => {
+    const lines: string[] = [
+      `📋 *RESUMO DO PROCESSAMENTO*`,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+      `📌 *Feature:* ${featureConfig.name}`,
+      `📁 *Arquivo Original:* ${originalFileName}`,
+      `🔢 *Parcial:* Parcial ${localParcial || '1'}`,
+      `🔍 *Filtro Aplicado:* ${selectedEstadoFilter}`,
+      ``,
+      `🛣️ *O que foi filtrado (Rodovias e Quantidades):*`,
+    ];
+
+    summaryItems.forEach((item) => {
+      const count = getItemRowCount(item);
+      const tabStr = item.tabName ? `[${item.tabName}] ` : '';
+      lines.push(`• ${tabStr}${item.rodovia}: *${count} ${count === 1 ? 'registro' : 'registros'}*`);
+    });
+
+    lines.push(``);
+    lines.push(`📊 *Total de Rodovias:* ${summaryItems.length}`);
+    lines.push(`📈 *Total Geral de Registros:* ${totalFilteredRecords}`);
+    const now = new Date();
+    const dateFormatted = now.toLocaleDateString('pt-BR');
+    const timeFormatted = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    lines.push(`📅 *Data:* ${dateFormatted} às ${timeFormatted}`);
+    lines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+
+    return lines.join('\n');
+  };
+
+  const handleCopySummary = async () => {
+    const text = generateWhatsAppSummaryText();
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopiedSummary(true);
+      setTimeout(() => setCopiedSummary(false), 2500);
+    } catch (err) {
+      console.error('Falha ao copiar:', err);
+    }
+  };
 
   const toggleSelect = (id: string) => {
     if (isRunning) return;
@@ -639,7 +714,14 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
         const cleanBaseName = xlsxFileName.replace(/\.xlsx$/i, '');
         const pdfFileName = `${cleanBaseName}.pdf`;
 
-        // Update item with download URLs
+        const keptRowsCount =
+          typeof processResult.keptRowsCount === 'number'
+            ? processResult.keptRowsCount
+            : selectedEstadoFilter.toLowerCase() === 'todos'
+            ? item.totalCount
+            : item.precaroCount;
+
+        // Update item with download URLs and kept rows
         setItems((prev) =>
           prev.map((it) =>
             it.id === item.id
@@ -650,6 +732,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                   pdfFileName,
                   xlsxDownloadUrl,
                   pdfDownloadUrl,
+                  keptRowsCount,
                   status: 'processing-xlsx',
                 }
               : it
@@ -704,6 +787,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
     setIsRunning(false);
     setCurrentProcessingIndex(-1);
     setIsFinished(true);
+    setShowSummary(true);
     setCurrentStepText(
       abortControllerRef.current
         ? 'Processamento interrompido.'
@@ -810,10 +894,16 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                   </div>
                   <div>
                     <div className="font-bold text-slate-800">
-                      {featureType === 'eps_defensa' ? 'Aparência Geral' : 'Status'}
+                      {featureType === 'terrapleno'
+                        ? 'Filtro por Risco'
+                        : featureType === 'eps_defensa'
+                        ? 'Aparência Geral'
+                        : 'Status'}
                     </div>
                     <div className="text-[11px] text-slate-500">
-                      {featureType === 'eps_defensa'
+                      {featureType === 'terrapleno'
+                        ? 'Filtrar por Nível de Risco (padrão: R4)'
+                        : featureType === 'eps_defensa'
                         ? 'Filtrar por Aparência Geral (padrão: Ruim)'
                         : 'Filtrar por situação'}
                     </div>
@@ -882,6 +972,222 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
             </div>
           )}
 
+          {/* Resumo do Processamento (WhatsApp & Print) */}
+          {(showSummary || isFinished) && summaryItems.length > 0 && (
+            <div className="bg-gradient-to-b from-white to-slate-50 border-2 border-emerald-500/50 rounded-2xl p-4 sm:p-5 shadow-sm space-y-3.5 transition-all animate-in fade-in duration-300">
+              {/* Header do Resumo */}
+              <div className="flex items-center justify-between flex-wrap gap-2.5 pb-3 border-b border-emerald-100">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                    <ClipboardCheck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h4 className="font-extrabold text-sm sm:text-base text-slate-900 tracking-tight">
+                        Resumo do Processamento
+                      </h4>
+                      <span className="text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-300">
+                        WhatsApp & Print
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 font-medium">
+                      Pronto para copiar e colar no grupo do WhatsApp ou capturar print da tela
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* View Mode Toggle */}
+                  <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 text-xs shadow-2xs">
+                    <button
+                      type="button"
+                      onClick={() => setSummaryViewMode('card')}
+                      className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${
+                        summaryViewMode === 'card'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Visual (Print)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSummaryViewMode('text')}
+                      className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${
+                        summaryViewMode === 'text'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Texto Formatado
+                    </button>
+                  </div>
+
+                  {/* Copy Button */}
+                  <button
+                    type="button"
+                    onClick={handleCopySummary}
+                    className={`px-3 py-1.5 rounded-xl font-extrabold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer ${
+                      copiedSummary
+                        ? 'bg-emerald-700 text-white ring-2 ring-emerald-300'
+                        : 'bg-emerald-600 hover:bg-emerald-700 text-white active:scale-95'
+                    }`}
+                    title="Copiar resumo formatado para o WhatsApp"
+                  >
+                    {copiedSummary ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-100" />
+                        <span>Copiado!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5 text-emerald-100" />
+                        <span>Copiar p/ WhatsApp</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {summaryViewMode === 'card' ? (
+                /* Quadro Visual de Resumo (Otimizado para Print Screen / Snipping Tool) */
+                <div
+                  id="quadro-resumo-turbo"
+                  className="bg-white border border-slate-200/90 rounded-xl p-3.5 sm:p-4 space-y-3.5 shadow-2xs"
+                >
+                  {/* Grid de Metadados: Feature, Arquivo Original, Parcial, Filtro */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">
+                        Feature
+                      </span>
+                      <span className="font-extrabold text-slate-900 text-xs sm:text-sm">
+                        {featureConfig.name}
+                      </span>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">
+                        Arquivo Original
+                      </span>
+                      <span
+                        className="font-bold text-slate-800 text-xs block truncate"
+                        title={originalFileName}
+                      >
+                        {originalFileName}
+                      </span>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">
+                          Parcial
+                        </span>
+                        <span className="font-extrabold text-emerald-800 text-xs sm:text-sm">
+                          Parcial {localParcial || '1'}
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md border border-emerald-200">
+                        {getAreaIdentifier(featureType, sheetName) || 'Padrão'}
+                      </span>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">
+                          Filtro Aplicado
+                        </span>
+                        <span className="font-extrabold text-amber-900 text-xs sm:text-sm">
+                          {selectedEstadoFilter}
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-md border border-amber-200">
+                        Situação
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Tabela de Rodovias Filtradas e Quantidades */}
+                  <div className="border border-slate-200 rounded-lg overflow-hidden">
+                    <div className="bg-slate-100/90 px-3 py-2 text-[11px] font-extrabold text-slate-700 flex items-center justify-between border-b border-slate-200">
+                      <span className="flex items-center gap-1.5">
+                        <Route className="w-3.5 h-3.5 text-slate-500" />
+                        Rodovias Filtradas
+                      </span>
+                      <span>Quantidades (Registros)</span>
+                    </div>
+
+                    <div className="divide-y divide-slate-100 max-h-[220px] overflow-y-auto bg-white scrollbar-thin">
+                      {summaryItems.map((item) => {
+                        const count = getItemRowCount(item);
+                        return (
+                          <div
+                            key={`sum-${item.id}`}
+                            className="px-3 py-2 flex items-center justify-between text-xs hover:bg-slate-50/80 transition-colors"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              {item.tabName && (
+                                <span className="text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 px-1.5 py-0.5 rounded shrink-0">
+                                  {item.tabName}
+                                </span>
+                              )}
+                              <span className="font-bold text-slate-900 truncate">
+                                {item.rodovia}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="font-mono font-extrabold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-md text-[11px]">
+                                {count} {count === 1 ? 'registro' : 'registros'}
+                              </span>
+                              {item.status === 'completed' && (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Rodapé da Tabela com Totais */}
+                    <div className="bg-emerald-50/80 border-t border-emerald-200 px-3 py-2 flex items-center justify-between text-xs font-bold text-emerald-950">
+                      <span>Total: {summaryItems.length} {summaryItems.length === 1 ? 'rodovia' : 'rodovias'}</span>
+                      <span className="font-mono text-emerald-900 bg-emerald-100 border border-emerald-300 px-2.5 py-0.5 rounded-md font-extrabold">
+                        {totalFilteredRecords} registros no total
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
+                    <span>📸 Dica: Pressione Win + Shift + S para printar este resumo e colar direto no WhatsApp.</span>
+                    <span>{new Date().toLocaleDateString('pt-BR')}</span>
+                  </div>
+                </div>
+              ) : (
+                /* Modo Texto Formatado para WhatsApp */
+                <div className="space-y-2">
+                  <div className="relative">
+                    <textarea
+                      readOnly
+                      value={generateWhatsAppSummaryText()}
+                      rows={9}
+                      className="w-full text-xs font-mono bg-slate-900 text-emerald-300 p-3 rounded-xl border border-slate-800 focus:outline-none resize-none leading-relaxed selection:bg-emerald-500 selection:text-black scrollbar-thin"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-500">
+                    <span>Texto formatado com formatação de negrito (*) para grupos do WhatsApp.</span>
+                    <button
+                      type="button"
+                      onClick={handleCopySummary}
+                      className="font-bold text-emerald-700 hover:text-emerald-900 underline cursor-pointer"
+                    >
+                      {copiedSummary ? 'Copiado para o WhatsApp!' : 'Copiar Texto Acima'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Rodovias List Header */}
           <div className="space-y-2">
             <div className="flex items-center justify-between flex-wrap gap-2">
@@ -892,25 +1198,38 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                 </span>
               </div>
 
-              {!isRunning && (
-                <div className="flex items-center gap-2 text-xs">
-                  <button
-                    type="button"
-                    onClick={handleSelectAll}
-                    className="text-emerald-700 hover:text-emerald-900 font-semibold cursor-pointer underline"
-                  >
-                    Marcar Todas
-                  </button>
-                  <span className="text-slate-300">•</span>
-                  <button
-                    type="button"
-                    onClick={handleDeselectAll}
-                    className="text-slate-500 hover:text-slate-700 font-semibold cursor-pointer underline"
-                  >
-                    Desmarcar
-                  </button>
-                </div>
-              )}
+              <div className="flex items-center gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setShowSummary((prev) => !prev)}
+                  className="text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-2.5 py-1 rounded-lg flex items-center gap-1 transition-colors cursor-pointer"
+                  title="Visualizar ou ocultar o resumo para WhatsApp e print"
+                >
+                  <ClipboardCheck className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>{showSummary ? 'Ocultar Resumo' : 'Resumo (WhatsApp)'}</span>
+                </button>
+
+                {!isRunning && (
+                  <>
+                    <span className="text-slate-300">•</span>
+                    <button
+                      type="button"
+                      onClick={handleSelectAll}
+                      className="text-emerald-700 hover:text-emerald-900 font-semibold cursor-pointer underline"
+                    >
+                      Marcar Todas
+                    </button>
+                    <span className="text-slate-300">•</span>
+                    <button
+                      type="button"
+                      onClick={handleDeselectAll}
+                      className="text-slate-500 hover:text-slate-700 font-semibold cursor-pointer underline"
+                    >
+                      Desmarcar
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
 
             {/* List of Rodovias */}
@@ -952,26 +1271,17 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                           <span className="text-xs font-bold text-slate-900">
                             {item.rodovia}
                           </span>
-                          {featureType === 'eps_defensa' ? (
-                            <span className="text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 px-1.5 py-0.2 rounded-md">
-                              {selectedEstadoFilter.toLowerCase() === 'todos'
-                                ? `${item.totalCount} ${item.totalCount === 1 ? 'registro' : 'registros'}`
-                                : `${item.precaroCount} ${item.precaroCount === 1 ? 'registro' : 'registros'} (${selectedEstadoFilter})`}
+                          {selectedEstadoFilter.toLowerCase() === 'todos' ? (
+                            <span className="text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-300 px-1.5 py-0.2 rounded-md">
+                              {item.totalCount} {item.totalCount === 1 ? 'registro' : 'registros'}
                             </span>
                           ) : item.precaroCount > 0 ? (
                             <span className="text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 px-1.5 py-0.2 rounded-md">
-                              {item.precaroCount}{' '}
-                              {featureType === 'sinalizacao_vertical'
-                                ? item.precaroCount === 1
-                                  ? 'registro REPROVADO'
-                                  : 'registros REPROVADOS'
-                                : item.precaroCount === 1
-                                ? 'registro PRECÁRIO'
-                                : 'registros PRECÁRIOS'}
+                              {item.precaroCount} {item.precaroCount === 1 ? 'registro' : 'registros'} ({selectedEstadoFilter})
                             </span>
                           ) : (
                             <span className="text-[10px] font-medium bg-slate-100 text-slate-500 px-1.5 py-0.2 rounded-md">
-                              0 {featureType === 'sinalizacao_vertical' ? 'reprovados' : 'precários'} ({item.totalCount} total)
+                              0 ({selectedEstadoFilter}) • {item.totalCount} total
                             </span>
                           )}
                         </div>
@@ -1082,6 +1392,27 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
               </button>
             ) : (
               <>
+                {isFinished && (
+                  <button
+                    type="button"
+                    onClick={handleCopySummary}
+                    className="px-4 py-2.5 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 font-bold text-xs transition-colors cursor-pointer flex items-center gap-1.5"
+                    title="Copiar resumo do que foi filtrado formatado para WhatsApp"
+                  >
+                    {copiedSummary ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-700" />
+                        <span>Copiado!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5 text-emerald-700" />
+                        <span>Copiar Resumo WhatsApp</span>
+                      </>
+                    )}
+                  </button>
+                )}
+
                 {isFinished && onBackToUpload && (
                   <button
                     type="button"

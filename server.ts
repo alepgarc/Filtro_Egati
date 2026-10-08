@@ -188,6 +188,10 @@ function normalizeString(str: string): string {
     .replace(/[^a-z0-9]/g, '');
 }
 
+function normalizeColKey(str: string): string {
+  return normalizeString(str);
+}
+
 function isTargetRowStatusCol(name: string, featureType?: string): boolean {
   if (!name) return false;
   const n = normalizeString(name);
@@ -197,7 +201,9 @@ function isTargetRowStatusCol(name: string, featureType?: string): boolean {
     n === 'rodovia' ||
     n === 'rodovias' ||
     n === 'uf' ||
+    n === 'estado' ||
     n === 'km' ||
+    n === 'kmfinal' ||
     n === 'sentido' ||
     n === 'bordo' ||
     n === 'cor' ||
@@ -229,6 +235,29 @@ function isTargetRowStatusCol(name: string, featureType?: string): boolean {
     ) {
       return true;
     }
+  }
+
+  if (featureType === 'terrapleno') {
+    // In Terrapleno, "situação" is an independent data column, NOT the risk filter column!
+    if (
+      n === 'situacao' ||
+      n === 'situacaoobra' ||
+      n === 'status' ||
+      n === 'statusgeral'
+    ) {
+      return false;
+    }
+    return (
+      n.includes('risco') ||
+      n.includes('risk') ||
+      n.includes('grau') ||
+      n.includes('classificacao') ||
+      n.includes('nivel') ||
+      n === 'r1' ||
+      n === 'r2' ||
+      n === 'r3' ||
+      n === 'r4'
+    );
   }
 
   if (featureType === 'eps_defensa') {
@@ -272,7 +301,7 @@ function isTargetRowStatusCol(name: string, featureType?: string): boolean {
       n === 'estadoconservacao' ||
       n === 'estadodeconservacao' ||
       n.startsWith('estadoconservac') ||
-      n === 'estado' ||
+      n === 'conservacao' ||
       n === 'situacao' ||
       n === 'aparencia' ||
       n === 'aparenciageral' ||
@@ -290,6 +319,7 @@ function isTargetRowStatusCol(name: string, featureType?: string): boolean {
     n === 'estadoconservacao' ||
     n === 'estadodeconservacao' ||
     n.startsWith('estadoconservac') ||
+    n === 'conservacao' ||
     n === 'situacaoretrorrefletancia' ||
     n === 'situacaoderetrorrefletancia' ||
     n === 'situacaoretrorefletancia' ||
@@ -305,20 +335,249 @@ function isTargetRowStatusCol(name: string, featureType?: string): boolean {
   );
 }
 
+function findStatusColumnIndex(headers: string[], featureType?: string): number {
+  if (!headers || headers.length === 0) return -1;
+
+  if (featureType === 'terrapleno') {
+    // 1. Priority 1: Exact / normalized match for "Nível Risco 2026 2°Sem"
+    let idx = headers.findIndex((h) => {
+      const n = normalizeColKey(h);
+      return (
+        n === 'nivelrisco20262sem' ||
+        n === 'nivelrisco2s2026' ||
+        n === 'nivelrisco2sem2026' ||
+        n === 'nivelrisco2026' ||
+        (n.includes('nivel') && n.includes('risco') && (n.includes('2026') || n.includes('2s') || n.includes('2sem')))
+      );
+    });
+    if (idx >= 0) return idx;
+
+    // 2. Priority 2: Contains both "nivel" and "risco" or "grau" and "risco"
+    idx = headers.findIndex((h) => {
+      const n = normalizeColKey(h);
+      if (n === 'situacao' || n === 'status' || n === 'situacaoobra') return false;
+      return (
+        (n.includes('nivel') && n.includes('risco')) ||
+        (n.includes('grau') && n.includes('risco')) ||
+        n === 'nivelrisco' ||
+        n === 'nivelderisco' ||
+        n === 'grauderisco'
+      );
+    });
+    if (idx >= 0) return idx;
+
+    // 3. Priority 3: Any column containing "risco" (excluding situacao/status)
+    idx = headers.findIndex((h) => {
+      const n = normalizeColKey(h);
+      if (n === 'situacao' || n === 'status' || n === 'situacaoobra') return false;
+      return n.includes('risco') || n.includes('risk');
+    });
+    if (idx >= 0) return idx;
+
+    return -1;
+  }
+
+  if (featureType === 'eps_defensa') {
+    let idx = headers.findIndex((h) => {
+      const n = normalizeColKey(h);
+      return n === 'aparenciageral' || n === 'aparencia_geral' || n === 'aparencia';
+    });
+    if (idx >= 0) return idx;
+
+    idx = headers.findIndex((h) => {
+      const n = normalizeColKey(h);
+      return n === 'estadoconservacao' || n === 'estado_conservacao' || n === 'conservacao' || n === 'condicao';
+    });
+    if (idx >= 0) return idx;
+
+    return headers.findIndex((h) => isTargetRowStatusCol(h, featureType));
+  }
+
+  if (
+    featureType === 'drenagem_profunda' ||
+    featureType === 'drenagem_superficial' ||
+    !featureType
+  ) {
+    // 1. Priority 1: Exact or normalized match for EstadoConservacao / Estado de Conservação
+    let idx = headers.findIndex((h) => {
+      const n = normalizeColKey(h);
+      return (
+        n === 'estadoconservacao' ||
+        n === 'estadodeconservacao' ||
+        n === 'estadoconservac' ||
+        n.startsWith('estadoconservac') ||
+        n === 'conservacao' ||
+        n === 'grauconservacao' ||
+        n === 'condicaoconservacao' ||
+        n === 'estadodeconserva'
+      );
+    });
+    if (idx >= 0) return idx;
+
+    // 2. Fallback: other condition/status indicators (strictly excluding geographic Estado/UF/Rodovia/Sentido/Km)
+    idx = headers.findIndex((h) => {
+      const n = normalizeColKey(h);
+      if (
+        n === 'estado' ||
+        n === 'uf' ||
+        n === 'rodovia' ||
+        n === 'sentido' ||
+        n === 'km' ||
+        n === 'kmfinal' ||
+        n === 'lado' ||
+        n === 'codauto' ||
+        n === 'elemento' ||
+        n === 'tipo' ||
+        n === 'material'
+      ) {
+        return false;
+      }
+      return (
+        n === 'situacao' ||
+        n === 'condicao' ||
+        n === 'status' ||
+        n === 'aparencia' ||
+        n === 'aparenciageral' ||
+        n === 'resultado' ||
+        n === 'resultadogeral'
+      );
+    });
+    if (idx >= 0) return idx;
+
+    return -1;
+  }
+
+  if (featureType === 'sinalizacao_vertical') {
+    let idx = headers.findIndex((h) => {
+      const n = normalizeColKey(h);
+      return n === 'situacaoretrorrefletancia' || n === 'situacaoderetrorrefletancia' || n === 'retrorrefletancia' || n.includes('retrorreflet');
+    });
+    if (idx >= 0) return idx;
+
+    return headers.findIndex((h) => isTargetRowStatusCol(h, featureType));
+  }
+
+  if (
+    featureType === 'sinalizacao_horizontal_dispositivo' ||
+    featureType === 'sinalizacao_horizontal_marca_viaria' ||
+    featureType === 'sinalizacao_horizontal_zebrado'
+  ) {
+    let idx = headers.findIndex((h) => {
+      const n = normalizeColKey(h);
+      return n === 'resultadogeral' || n === 'resultado_geral' || n === 'resultado';
+    });
+    if (idx >= 0) return idx;
+
+    return headers.findIndex((h) => isTargetRowStatusCol(h, featureType));
+  }
+
+  return headers.findIndex((h) => isTargetRowStatusCol(h, featureType));
+}
+
+function findRodoviaColumnIndex(headers: string[]): number {
+  if (!headers || headers.length === 0) return -1;
+
+  let idx = headers.findIndex((h) => {
+    const n = normalizeColKey(h);
+    return n === 'rodovia' || n === 'rodovias';
+  });
+  if (idx >= 0) return idx;
+
+  idx = headers.findIndex((h) => {
+    const n = normalizeColKey(h);
+    return (
+      n.startsWith('rodovia') ||
+      n === 'br' ||
+      n === 'pr' ||
+      n === 'sp' ||
+      n === 'sc' ||
+      n === 'rs' ||
+      n === 'mg' ||
+      n === 'trecho'
+    );
+  });
+  return idx;
+}
+
 function isEstadoConservacaoCol(name: string): boolean {
   return isTargetRowStatusCol(name);
 }
 
 function matchesEstadoFilter(cellValue: string, filter: string): boolean {
-  if (!filter || filter.toUpperCase() === 'TODOS') return true;
-  const cellNorm = normalizeString(cellValue);
-  const filterNorm = normalizeString(filter);
+  if (!filter || filter.toUpperCase() === 'TODOS' || filter.toUpperCase() === 'TODAS') return true;
+  if (!cellValue) return false;
 
-  if (!cellNorm) return false;
-  if (cellNorm === filterNorm) return true;
-  if (cellNorm.includes(filterNorm) || filterNorm.includes(cellNorm)) return true;
+  const rawTrimmed = String(cellValue).trim();
+  const cellKey = normalizeColKey(rawTrimmed);
+  const filterKey = normalizeColKey(filter);
+
+  if (!cellKey) return false;
+  if (cellKey === filterKey) return true;
+
+  const isFilterR4 = filterKey === 'r4' || filterKey.endsWith('r4');
+  const isFilterR3 = filterKey === 'r3' || filterKey.endsWith('r3');
+  const isFilterR2 = filterKey === 'r2' || filterKey.endsWith('r2');
+  const isFilterR1 = filterKey === 'r1' || filterKey.endsWith('r1');
+
+  if (isFilterR4) {
+    return (
+      cellKey === 'r4' ||
+      cellKey.includes('r4') ||
+      cellKey.includes('risco4') ||
+      cellKey.includes('nivel4') ||
+      cellKey.includes('grau4') ||
+      cellKey === '4' ||
+      rawTrimmed === '4' ||
+      rawTrimmed === '4.0' ||
+      /^4[\s\-_]/i.test(rawTrimmed) ||
+      /[\s\-_(]4[)\s\-_]?$/i.test(rawTrimmed)
+    );
+  }
+  if (isFilterR3) {
+    return (
+      cellKey === 'r3' ||
+      cellKey.includes('r3') ||
+      cellKey.includes('risco3') ||
+      cellKey.includes('nivel3') ||
+      cellKey.includes('grau3') ||
+      cellKey === '3' ||
+      rawTrimmed === '3' ||
+      rawTrimmed === '3.0' ||
+      /^3[\s\-_]/i.test(rawTrimmed) ||
+      /[\s\-_(]3[)\s\-_]?$/i.test(rawTrimmed)
+    );
+  }
+  if (isFilterR2) {
+    return (
+      cellKey === 'r2' ||
+      cellKey.includes('r2') ||
+      cellKey.includes('risco2') ||
+      cellKey.includes('nivel2') ||
+      cellKey.includes('grau2') ||
+      cellKey === '2' ||
+      rawTrimmed === '2' ||
+      rawTrimmed === '2.0' ||
+      /^2[\s\-_]/i.test(rawTrimmed) ||
+      /[\s\-_(]2[)\s\-_]?$/i.test(rawTrimmed)
+    );
+  }
+  if (isFilterR1) {
+    return (
+      cellKey === 'r1' ||
+      cellKey.includes('r1') ||
+      cellKey.includes('risco1') ||
+      cellKey.includes('nivel1') ||
+      cellKey.includes('grau1') ||
+      cellKey === '1' ||
+      rawTrimmed === '1' ||
+      rawTrimmed === '1.0' ||
+      /^1[\s\-_]/i.test(rawTrimmed) ||
+      /[\s\-_(]1[)\s\-_]?$/i.test(rawTrimmed)
+    );
+  }
 
   // Gender-neutral normalized matches
+  const filterNorm = normalizeString(filter);
   const isFilterReprovado =
     filterNorm.startsWith('reprovad') ||
     filterNorm === 'nok' ||
@@ -345,7 +604,6 @@ function matchesEstadoFilter(cellValue: string, filter: string): boolean {
 
   const isFilterPrecario =
     filterNorm.startsWith('precar') ||
-    filterNorm === 'pr' ||
     filterNorm === 'prec' ||
     filterNorm.includes('critico');
 
@@ -357,51 +615,49 @@ function matchesEstadoFilter(cellValue: string, filter: string): boolean {
 
   if (isFilterReprovado) {
     return (
-      cellNorm.startsWith('reprovad') ||
-      cellNorm === 'nok' ||
-      cellNorm === 'ruim' ||
-      cellNorm.includes('ruim') ||
-      cellNorm.includes('nc') ||
-      cellNorm.includes('naoconforme') ||
-      cellNorm.includes('pessimo')
+      cellKey.startsWith('reprovad') ||
+      cellKey === 'nok' ||
+      cellKey === 'ruim' ||
+      cellKey.includes('ruim') ||
+      cellKey.includes('nc') ||
+      cellKey.includes('naoconforme') ||
+      cellKey.includes('pessimo')
     );
   }
   if (isFilterRegular) {
     return (
-      cellNorm.startsWith('regula') ||
-      cellNorm === 'reg' ||
-      cellNorm === 'r'
+      cellKey.startsWith('regula') ||
+      cellKey === 'reg'
     );
   }
   if (isFilterAprovado) {
     return (
-      cellNorm.startsWith('aprovad') ||
-      cellNorm === 'ok' ||
-      cellNorm === 'b' ||
-      cellNorm === 'boa' ||
-      cellNorm.startsWith('bom') ||
-      cellNorm.startsWith('boa') ||
-      cellNorm.includes('bom') ||
-      cellNorm.includes('conforme')
+      cellKey.startsWith('aprovad') ||
+      cellKey === 'ok' ||
+      cellKey === 'b' ||
+      cellKey === 'boa' ||
+      cellKey.startsWith('bom') ||
+      cellKey.startsWith('boa') ||
+      cellKey.includes('bom') ||
+      cellKey.includes('conforme')
     );
   }
   if (isFilterPrecario) {
     return (
-      cellNorm.startsWith('precar') ||
-      cellNorm === 'pr' ||
-      cellNorm === 'prec' ||
-      cellNorm.includes('ruim') ||
-      cellNorm.includes('pessimo') ||
-      cellNorm.startsWith('reprovad') ||
-      cellNorm.includes('critico')
+      cellKey.startsWith('precar') ||
+      cellKey === 'prec' ||
+      cellKey.includes('ruim') ||
+      cellKey.includes('pessimo') ||
+      cellKey.startsWith('reprovad') ||
+      cellKey.includes('critico')
     );
   }
   if (isFilterSuficiente) {
     return (
-      cellNorm.startsWith('sufic') ||
-      cellNorm === 'su' ||
-      cellNorm === 'sf' ||
-      cellNorm === 's'
+      cellKey.startsWith('sufic') ||
+      cellKey === 'su' ||
+      cellKey === 'sf' ||
+      cellKey === 's'
     );
   }
 
@@ -446,35 +702,73 @@ function normalizeRodoviaForFeature(rodovia: string, featureType?: string): stri
   return trimmed;
 }
 
+function extractHighwayPrefixAndNumber(val: string): { prefix: string; number: string; clean: string } {
+  if (!val) return { prefix: '', number: '', clean: '' };
+  const clean = val.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+  const match = clean.match(/\b([A-Z]{2})[\s\/\-_]?(\d{2,4})\b/);
+  if (match) {
+    return {
+      prefix: match[1].toLowerCase(),
+      number: match[2],
+      clean: clean.replace(/[^A-Z0-9]/g, '').toLowerCase(),
+    };
+  }
+
+  const numMatch = clean.match(/\b(\d{2,4})\b/);
+  const digits = numMatch ? numMatch[1] : '';
+  const cleanOnly = clean.replace(/[^A-Z0-9]/g, '').toLowerCase();
+
+  return { prefix: '', number: digits, clean: cleanOnly };
+}
+
 function matchesRodoviaFilter(cellValue: string, filter: string, featureType?: string): boolean {
   if (!filter || filter.toUpperCase() === 'TODAS' || filter.toUpperCase() === 'TODOS') return true;
   if (!cellValue) return false;
 
+  const rawCell = String(cellValue).trim();
+  const rawFilter = String(filter).trim();
+
   if (featureType === 'eps_defensa') {
-    const normFilter = normalizeRodoviaForFeature(filter, 'eps_defensa');
-    const normCell = normalizeRodoviaForFeature(cellValue, 'eps_defensa');
+    const normFilter = normalizeRodoviaForFeature(rawFilter, 'eps_defensa');
+    const normCell = normalizeRodoviaForFeature(rawCell, 'eps_defensa');
     if (normFilter === 'BR/376' && normCell === 'BR/376') {
       return true;
     }
   }
 
-  const cNorm = normalizeString(cellValue);
-  const fNorm = normalizeString(filter);
-  if (cNorm === fNorm) return true;
+  const cellMeta = extractHighwayPrefixAndNumber(rawCell);
+  const filterMeta = extractHighwayPrefixAndNumber(rawFilter);
 
-  if (fNorm.includes('376') && cNorm.includes('376')) return true;
+  if (!cellMeta.clean || !filterMeta.clean) return false;
 
-  const cClean = cNorm.replace(/[^a-z0-9]/g, '');
-  const fClean = fNorm.replace(/[^a-z0-9]/g, '');
-  if (cClean === fClean) return true;
-  if (cClean.length > 0 && fClean.length > 0) {
-    if (cClean.includes(fClean) || fClean.includes(cClean)) return true;
+  // Exact clean string match
+  if (cellMeta.clean === filterMeta.clean) return true;
+
+  // Disallow match if prefixes conflict (e.g. 'br' vs 'pr')
+  if (cellMeta.prefix && filterMeta.prefix && cellMeta.prefix !== filterMeta.prefix) {
+    return false;
   }
 
-  // Also match numbers if rodovia has digits (e.g. 323 or 376)
-  const cDigits = cNorm.replace(/\D/g, '');
-  const fDigits = fNorm.replace(/\D/g, '');
-  if (cDigits && fDigits && cDigits === fDigits) return true;
+  // Same number and non-conflicting prefixes
+  if (cellMeta.number && filterMeta.number && cellMeta.number === filterMeta.number) {
+    if (cellMeta.prefix && filterMeta.prefix && cellMeta.prefix === filterMeta.prefix) {
+      return true;
+    }
+    if (!cellMeta.prefix || !filterMeta.prefix) {
+      return true;
+    }
+  }
+
+  // Substring match only if both clean strings are long enough and no prefix conflict
+  if (cellMeta.clean.length >= 4 && filterMeta.clean.length >= 4) {
+    if (cellMeta.prefix && filterMeta.prefix && cellMeta.prefix !== filterMeta.prefix) {
+      return false;
+    }
+    if (cellMeta.clean.includes(filterMeta.clean) || filterMeta.clean.includes(cellMeta.clean)) {
+      return true;
+    }
+  }
 
   return false;
 }
@@ -610,12 +904,8 @@ async function getSheetDetailsAsync(
       letter: idxToCol(index),
     }));
 
-    let rodoviaColIdx = -1;
-    let estadoColIdx = -1;
-    headerRow.forEach((h, idx) => {
-      if (isRodoviaCol(h)) rodoviaColIdx = idx;
-      if (isTargetRowStatusCol(h, featureType)) estadoColIdx = idx;
-    });
+    const rodoviaColIdx = findRodoviaColumnIndex(headerRow);
+    const estadoColIdx = findStatusColumnIndex(headerRow, featureType);
 
     const dataStartIdx = headerRowIdx + 1;
     const rowFiltersData: { r: string; e: string }[] = [];
@@ -646,7 +936,55 @@ async function getSheetDetailsAsync(
         const normE = normalizeString(eVal);
         let matchedKey = '';
 
-        if (featureType === 'eps_defensa') {
+        if (featureType === 'terrapleno') {
+          if (
+            normE === 'r4' ||
+            normE.includes('r4') ||
+            normE.includes('risco4') ||
+            normE.includes('nivel4') ||
+            normE.includes('grau4') ||
+            normE === '4' ||
+            /^4[\s\-_]/.test(eVal.trim()) ||
+            /[\s\-_(]4[)\s\-_]?$/.test(eVal.trim())
+          ) {
+            matchedKey = 'R4';
+          } else if (
+            normE === 'r3' ||
+            normE.includes('r3') ||
+            normE.includes('risco3') ||
+            normE.includes('nivel3') ||
+            normE.includes('grau3') ||
+            normE === '3' ||
+            /^3[\s\-_]/.test(eVal.trim()) ||
+            /[\s\-_(]3[)\s\-_]?$/.test(eVal.trim())
+          ) {
+            matchedKey = 'R3';
+          } else if (
+            normE === 'r2' ||
+            normE.includes('r2') ||
+            normE.includes('risco2') ||
+            normE.includes('nivel2') ||
+            normE.includes('grau2') ||
+            normE === '2' ||
+            /^2[\s\-_]/.test(eVal.trim()) ||
+            /[\s\-_(]2[)\s\-_]?$/.test(eVal.trim())
+          ) {
+            matchedKey = 'R2';
+          } else if (
+            normE === 'r1' ||
+            normE.includes('r1') ||
+            normE.includes('risco1') ||
+            normE.includes('nivel1') ||
+            normE.includes('grau1') ||
+            normE === '1' ||
+            /^1[\s\-_]/.test(eVal.trim()) ||
+            /[\s\-_(]1[)\s\-_]?$/.test(eVal.trim())
+          ) {
+            matchedKey = 'R1';
+          } else {
+            matchedKey = eVal;
+          }
+        } else if (featureType === 'eps_defensa') {
           if (normE === 'ruim' || normE.startsWith('ruim')) {
             matchedKey = 'Ruim';
           } else if (normE === 'regular' || normE.startsWith('regular')) {
@@ -1298,23 +1636,36 @@ async function processWorkbookWithZip(
   const headerRowMatchRegex = new RegExp(`^[A-Z]+${headerRowNumber}$`);
   const headerStripRegex = new RegExp(`${headerRowNumber}$`);
 
+  const headersMap = new Map<string, string>(); // colLetter -> headerVal
+  const headerLettersList: string[] = [];
+
   for (let i = 0; i < cNodes.length; i++) {
     const cEl = cNodes.item(i);
     const rAttr = cEl?.getAttribute('r');
     if (rAttr && headerRowMatchRegex.test(rAttr)) {
       const colLetter = rAttr.replace(headerStripRegex, '');
       const headerVal = getCellTextValue(cEl, sharedStrings);
-      if (isTargetRowStatusCol(headerVal, featureType)) {
-        estadoConservacaoColLetter = colLetter;
-      }
-      if (isRodoviaCol(headerVal)) {
-        rodoviaColLetter = colLetter;
-      }
+      headersMap.set(colLetter, headerVal);
+      headerLettersList.push(colLetter);
+
       const normH = String(headerVal || '').toLowerCase().trim();
       if (normH === 'km' || normH === 'kmlegenda' || normH === 'km_legenda' || (!kmColLetter && normH.includes('km'))) {
         kmColLetter = colLetter;
       }
     }
+  }
+
+  headerLettersList.sort((a, b) => colToIdx(a) - colToIdx(b));
+  const headerValuesList = headerLettersList.map((letter) => headersMap.get(letter) || '');
+
+  const statusIdxInHeaders = findStatusColumnIndex(headerValuesList, featureType);
+  const rodoviaIdxInHeaders = findRodoviaColumnIndex(headerValuesList);
+
+  if (statusIdxInHeaders >= 0) {
+    estadoConservacaoColLetter = headerLettersList[statusIdxInHeaders];
+  }
+  if (rodoviaIdxInHeaders >= 0) {
+    rodoviaColLetter = headerLettersList[rodoviaIdxInHeaders];
   }
 
   // Check if filtering by EstadoConservacao is active
@@ -2074,32 +2425,7 @@ async function processWorkbookWithZip(
           if (r && r.parentNode) r.parentNode.removeChild(r);
         });
 
-        // Clean definedNames referencing removed sheets or containing #REF!
-        const defNamesNodes = wbDom.getElementsByTagName('definedNames');
-        for (let i = 0; i < defNamesNodes.length; i++) {
-          const dnContainer = defNamesNodes.item(i);
-          if (dnContainer) {
-            const dnList = Array.from(dnContainer.getElementsByTagName('definedName'));
-            dnList.forEach((dn: any) => {
-              const text = dn.textContent || '';
-              if (
-                text.includes('#REF!') ||
-                (targetSheetName &&
-                  !text.includes(`'${targetSheetName}'!`) &&
-                  !text.includes(`${targetSheetName}!`) &&
-                  text.includes('!'))
-              ) {
-                if (dn.parentNode) dn.parentNode.removeChild(dn);
-              }
-            });
-            if (dnContainer.getElementsByTagName('definedName').length === 0 && dnContainer.parentNode) {
-              dnContainer.parentNode.removeChild(dnContainer);
-            }
-          }
-        }
-
-        // Save updated workbook.xml and workbook.xml.rels
-        zip.file('xl/workbook.xml', serializer.serializeToString(wbDom));
+        // Save updated workbook.xml.rels
         zip.file('xl/_rels/workbook.xml.rels', serializer.serializeToString(wbRelsDom));
 
         // Remove all other worksheet files and unneeded drawing files from the zip
@@ -2130,6 +2456,18 @@ async function processWorkbookWithZip(
           }
         }
       }
+
+      // Always remove definedNames entirely from workbook.xml because rows/cols were filtered,
+      // sheets were removed/re-indexed, and any existing definedNames (e.g. _xlnm._FilterDatabase,
+      // print areas, sheet ranges) contain invalid coordinates or wrong localSheetIds, causing Excel
+      // to display "Registros Removidos: Intervalo nomeado de parte de /xl/workbook.xml" upon opening.
+      const defNamesNodes = Array.from(wbDom.getElementsByTagName('definedNames'));
+      defNamesNodes.forEach((dn: any) => {
+        if (dn && dn.parentNode) dn.parentNode.removeChild(dn);
+      });
+
+      // Save updated workbook.xml back to zip
+      zip.file('xl/workbook.xml', serializer.serializeToString(wbDom));
     }
   } catch (err) {
     console.warn('Could not isolate target sheet in workbook.xml:', err);
@@ -2496,6 +2834,15 @@ function getAreaIdentifier(featureType: string, sheetName?: string): string | nu
     return '_EPS_Defensa_';
   }
 
+  // 8. Terrapleno
+  if (
+    normFeature === 'terrapleno' ||
+    normFeature.includes('terraplen') ||
+    s.includes('terraplen')
+  ) {
+    return '_Terrapleno_';
+  }
+
   return null;
 }
 
@@ -2597,6 +2944,30 @@ app.post('/api/process', async (req, res) => {
   }
   if (!fileInfo || !fs.existsSync(fileInfo.filePath)) {
     return res.status(404).json({ error: 'Arquivo original não encontrado ou sessão expirada.' });
+  }
+
+  // Ensure converted .xlsx file has complete media if source .xls exists
+  if (fileInfo && fileInfo.filePath.endsWith('-converted.xlsx')) {
+    const sourceXlsPath = fileInfo.filePath.replace(/-converted\.xlsx$/, '.xls');
+    if (fs.existsSync(sourceXlsPath)) {
+      try {
+        let shouldReconvert = false;
+        if (!fs.existsSync(fileInfo.filePath)) {
+          shouldReconvert = true;
+        } else {
+          const zipCheck = await JSZip.loadAsync(fs.readFileSync(fileInfo.filePath));
+          const mediaCount = Object.keys(zipCheck.files).filter((k) => k.startsWith('xl/media/')).length;
+          if (mediaCount === 0) {
+            shouldReconvert = true;
+          }
+        }
+        if (shouldReconvert) {
+          await convertXlsToXlsxWithImages(sourceXlsPath, fileInfo.filePath);
+        }
+      } catch (checkErr) {
+        console.warn('Re-conversion check failed:', checkErr);
+      }
+    }
   }
 
   try {
@@ -3171,7 +3542,9 @@ function parseBiffBlipsAndShapes(fileBuf: Buffer) {
         if (row1 >= 1 && row1 < 30000 && col1 >= 0 && col1 < 300) {
           let pib: number | null = null;
           let filename: string | null = null;
-          const lookback = fileBuf.subarray(Math.max(0, i - 600), i);
+
+          // Check lookback up to 8000 bytes for Opt (0xF00B)
+          const lookback = fileBuf.subarray(Math.max(0, i - 8000), i);
           for (let j = lookback.length - 8; j >= 0; j--) {
             if (lookback[j + 2] === 0x0B && lookback[j + 3] === 0xF0) {
               const numProps = lookback.readUInt16LE(j) >> 4;
@@ -3186,11 +3559,36 @@ function parseBiffBlipsAndShapes(fileBuf: Buffer) {
                 off += 6;
               }
               const text = lookback.subarray(j + 8).toString('utf16le');
-              const m = text.match(/([A-Za-z0-9_\+\-]+\.jpg)/i);
-              if (m) filename = m[1];
+              const m = text.match(/([A-Za-z0-9_\+\-\.\s]+\.jpe?g)/i);
+              if (m) filename = m[1].trim();
               break;
             }
           }
+
+          // If pib not found in lookback, search lookahead up to 4000 bytes
+          if (pib === null) {
+            const lookahead = fileBuf.subarray(i + 8 + recLen, Math.min(fileBuf.length, i + 8 + recLen + 4000));
+            for (let j = 0; j < lookahead.length - 8; j++) {
+              if (lookahead[j + 2] === 0x0B && lookahead[j + 3] === 0xF0) {
+                const numProps = lookahead.readUInt16LE(j) >> 4;
+                const optLen = lookahead.readUInt32LE(j + 4);
+                let off = j + 8;
+                for (let pr = 0; pr < numProps && off + 6 <= j + 8 + optLen && off + 6 <= lookahead.length; pr++) {
+                  const pid = lookahead.readUInt16LE(off);
+                  const val = lookahead.readUInt32LE(off + 2);
+                  if ((pid & 0x3FFF) === 0x0104) {
+                    pib = val;
+                  }
+                  off += 6;
+                }
+                const text = lookahead.subarray(j + 8).toString('utf16le');
+                const m = text.match(/([A-Za-z0-9_\+\-\.\s]+\.jpe?g)/i);
+                if (m) filename = m[1].trim();
+                break;
+              }
+            }
+          }
+
           shapes.push({ col1, row1, col2, row2, pib, filename });
         }
       }
@@ -3516,8 +3914,41 @@ async function convertXlsToXlsxWithImages(xlsPath: string, outputPath: string) {
               ext: { width: 120, height: 90 },
               editAs: 'oneCell',
             });
+            placedCells.add(`${anchor.col1}_${anchor.row1}`);
           } catch (addErr) {
             console.warn(`Error adding fallback image ${i}:`, addErr);
+          }
+        }
+      }
+
+      // 4. Sequential Fallback Method: if no shapes or anchors were matched, map non-empty photo cells row-by-row and col-by-col to extractedImages in sequential order
+      if (placedCells.size === 0 && extractedImages.length > 0 && photoColIndices.length > 0) {
+        let imgIdx = 0;
+        for (let r = 1; r < rawRows.length; r++) {
+          const rowVals = rawRows[r] || [];
+          for (const colIdx of photoColIndices) {
+            const val = String(rowVals[colIdx] || '').trim();
+            if (val) {
+              if (imgIdx < extractedImages.length) {
+                const imgItem = extractedImages[imgIdx];
+                imgIdx++;
+                const cellKey = `${colIdx}_${r}`;
+                try {
+                  const imageId = wb.addImage({
+                    buffer: imgItem.buffer,
+                    extension: imgItem.format === 'PNG' ? 'png' : 'jpeg',
+                  });
+                  ws.addImage(imageId, {
+                    tl: { col: colIdx, row: r },
+                    ext: { width: 120, height: 90 },
+                    editAs: 'oneCell',
+                  });
+                  placedCells.add(cellKey);
+                } catch (addErr) {
+                  console.warn(`Error adding sequential image to cell R${r}C${colIdx}:`, addErr);
+                }
+              }
+            }
           }
         }
       }
@@ -3899,7 +4330,9 @@ app.get('/api/download-pdf/:downloadId', async (req, res) => {
     }
 
     const featureName =
-      processedInfo.featureType === 'eps_defensa'
+      processedInfo.featureType === 'terrapleno'
+        ? 'Terrapleno'
+        : processedInfo.featureType === 'eps_defensa'
         ? 'EPS - Defensa'
         : processedInfo.featureType === 'sinalizacao_vertical'
         ? 'Sinalização Vertical'
@@ -3935,6 +4368,9 @@ app.get('/api/download-pdf/:downloadId', async (req, res) => {
         else if (headerLower === 'elemento') colW = 18.0;
         else if (headerLower.includes('limpeza') || headerLower.includes('reparar') || headerLower.includes('extensao')) colW = 15.0;
         else if (headerLower.includes('estado')) colW = 19.0;
+        else if (headerLower.includes('risco')) colW = 17.0;
+        else if (headerLower.includes('identificacao')) colW = 17.0;
+        else if (headerLower.includes('situacao')) colW = 15.0;
         else colW = 15.0;
 
         baseWidths.push(colW);
@@ -4053,7 +4489,9 @@ app.get('/api/download-pdf/:downloadId', async (req, res) => {
         }
         if (processedInfo.appliedEstadoFilter) {
           const filterColLabel =
-            processedInfo.featureType === 'eps_defensa'
+            processedInfo.featureType === 'terrapleno'
+              ? 'Nível de Risco'
+              : processedInfo.featureType === 'eps_defensa'
               ? 'Aparência Geral'
               : processedInfo.featureType === 'sinalizacao_vertical'
               ? 'Retrorrefletância'
@@ -4126,6 +4564,121 @@ app.post('/api/generate-sample', async (req, res) => {
   try {
     const { featureType = 'drenagem_profunda' } = req.body || {};
     const wb = new ExcelJS.Workbook();
+
+    if (featureType === 'terrapleno') {
+      const terraHeaders = [
+        'codAuto',
+        'situação',
+        'Identificação 2S. 2026',
+        'lado',
+        'km',
+        'km Final',
+        'rodovia',
+        'sentido',
+        'Nível Risco 2026 2°Sem',
+        'Foto_Anterior',
+        'foto1',
+        'foto2',
+        'foto3',
+        'foto4',
+        'foto5',
+        'foto6',
+        'foto7',
+        'foto8',
+        'foto9',
+        'foto10',
+        'foto11',
+        'foto12',
+        'foto13',
+        'foto14',
+        'foto15',
+        'ObservacoesGerais',
+        'ResponsavelInspecao',
+        'CustoEstimado',
+      ];
+
+      const ws = wb.addWorksheet('Terrapleno');
+      ws.columns = terraHeaders.map((h, i) => ({
+        header: h,
+        key: `col_${i}`,
+        width: 18,
+      }));
+
+      const highways = ['PR-445', 'BR-369', 'PR-323', 'BR-376', 'PR-090'];
+      const sentidos = ['Norte', 'Sul', 'Leste', 'Oeste'];
+      const lados = ['Direito', 'Esquerdo'];
+      const riscos = ['R4', 'R3', 'R2', 'R1'];
+      const situacoes = ['Ativo', 'Monitorado', 'Estabilizado'];
+
+      for (let i = 1; i <= 60; i++) {
+        const rowCod = 1000 + i;
+        const rod = highways[i % highways.length];
+        const st = sentidos[i % sentidos.length];
+        const ld = lados[i % lados.length];
+        const rsc = riscos[i % riscos.length];
+        const sit = situacoes[i % situacoes.length];
+
+        ws.addRow([
+          rowCod,
+          sit,
+          `TALUDE-2S-${rowCod}`,
+          ld,
+          (i * 1.5).toFixed(1),
+          (i * 1.5 + 0.3).toFixed(1),
+          rod,
+          st,
+          rsc,
+          `FOTO_ANT_${rowCod}.jpg`,
+          `FOTO_${rowCod}_01.jpg`,
+          `FOTO_${rowCod}_02.jpg`,
+          `FOTO_${rowCod}_03.jpg`,
+          `FOTO_${rowCod}_04.jpg`,
+          `FOTO_${rowCod}_05.jpg`,
+          `FOTO_${rowCod}_06.jpg`,
+          `FOTO_${rowCod}_07.jpg`,
+          `FOTO_${rowCod}_08.jpg`,
+          `FOTO_${rowCod}_09.jpg`,
+          `FOTO_${rowCod}_10.jpg`,
+          `FOTO_${rowCod}_11.jpg`,
+          `FOTO_${rowCod}_12.jpg`,
+          `FOTO_${rowCod}_13.jpg`,
+          `FOTO_${rowCod}_14.jpg`,
+          `FOTO_${rowCod}_15.jpg`,
+          `Talude de corte com inclinação acentuada no km ${(i * 1.5).toFixed(1)}`,
+          'Eng. Fiscal EPR',
+          (15000 + i * 500).toFixed(2),
+        ]);
+      }
+
+      const sampleFileName = 'planilha_terrapleno_exemplo.xlsx';
+      const sampleFilePath = path.join(UPLOAD_DIR, `sample-${Date.now()}.xlsx`);
+      await wb.xlsx.writeFile(sampleFilePath);
+
+      const fileId = path.basename(sampleFilePath);
+      const stat = fs.statSync(sampleFilePath);
+      const sheetNames = wb.worksheets.map((w) => w.name);
+      const activeSheet = sheetNames[0];
+      const sheetDetails = await getSheetDetailsAsync(sampleFilePath, activeSheet, featureType);
+
+      uploadedFiles.set(fileId, {
+        fileId,
+        originalName: sampleFileName,
+        filePath: sampleFilePath,
+        fileSize: stat.size,
+        uploadedAt: Date.now(),
+        sheetNames,
+      });
+
+      return res.json({
+        fileId,
+        originalName: sampleFileName,
+        fileSize: stat.size,
+        sheetNames,
+        activeSheet,
+        sheetDetails,
+        featureType,
+      });
+    }
 
     if (featureType === 'eps_defensa') {
       const epsSheets = ['Barreira de Concreto', 'Defensa Metalica', 'Defensa OAE'];

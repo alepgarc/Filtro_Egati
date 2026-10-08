@@ -263,6 +263,58 @@ export const EPS_DEFENSA_FIELDS = [
   'Foto4',
 ] as const;
 
+export const TERRAPLENO_FIELDS = [
+  'codAuto',
+  'situação',
+  'Identificação 2S. 2026',
+  'lado',
+  'km',
+  'km Final',
+  'rodovia',
+  'sentido',
+  'Nível Risco 2026 2°Sem',
+  'Foto_Anterior',
+  'foto1',
+  'foto2',
+  'foto3',
+  'foto4',
+  'foto5',
+  'foto6',
+  'foto7',
+  'foto8',
+  'foto9',
+  'foto10',
+  'foto11',
+  'foto12',
+  'foto13',
+  'foto14',
+  'foto15',
+] as const;
+
+export const TERRAPLENO_TURBO_FIELDS = [
+  'codAuto',
+  'situação',
+  'lado',
+  'km',
+  'km Final',
+  'rodovia',
+  'sentido',
+  'Nível Risco 2026 2°Sem',
+  'Foto_Anterior',
+  'foto1',
+  'foto2',
+  'foto3',
+  'foto4',
+] as const;
+
+export const RISCO_TERRAPLENO_OPTIONS = [
+  { value: '', label: 'Todos os riscos (sem filtro)' },
+  { value: 'R4', label: 'R4' },
+  { value: 'R3', label: 'R3' },
+  { value: 'R2', label: 'R2' },
+  { value: 'R1', label: 'R1' },
+] as const;
+
 export const APARENCIA_GERAL_OPTIONS = [
   { value: '', label: 'Todas as aparências (sem filtro)' },
   { value: 'Ruim', label: 'Ruim' },
@@ -327,6 +379,14 @@ export const DRAINAGE_FEATURES: Record<DrainageFeatureType, DrainageFeatureConfi
       'Mantém colunas de codAuto, km, kmFinal, sentido, tipoDefensa, rodovia, lado, observacao, aparenciaGeral, Foto1 a Foto4.',
     fields: EPS_DEFENSA_FIELDS,
   },
+  terrapleno: {
+    id: 'terrapleno',
+    name: 'Terrapleno',
+    tagline: 'Taludes, Aterros e Encostas',
+    description:
+      'Mantém colunas de codAuto, situação, Identificação 2S. 2026, lado, km, km Final, rodovia, sentido, Nível Risco 2026 2°Sem, Foto_Anterior e Fotos 1 a 15.',
+    fields: TERRAPLENO_FIELDS,
+  },
 };
 
 export const normalizeColKey = (str: string): string => {
@@ -385,6 +445,14 @@ const epsDefensaNormSet = new Set(
   EPS_DEFENSA_FIELDS.map((f) => normalizeColKey(f))
 );
 
+const terraplenoNormSet = new Set(
+  TERRAPLENO_FIELDS.map((f) => normalizeColKey(f))
+);
+
+const terraplenoTurboNormSet = new Set(
+  TERRAPLENO_TURBO_FIELDS.map((f) => normalizeColKey(f))
+);
+
 export const isDefaultPresetField = (
   columnName: string,
   feature: DrainageFeatureType = 'drenagem_profunda',
@@ -398,6 +466,10 @@ export const isDefaultPresetField = (
 
   if (isTurbo) {
     switch (feature) {
+      case 'terrapleno':
+        fields = TERRAPLENO_TURBO_FIELDS;
+        normSet = terraplenoTurboNormSet;
+        break;
       case 'eps_defensa':
         fields = EPS_DEFENSA_FIELDS;
         normSet = epsDefensaNormSet;
@@ -430,6 +502,10 @@ export const isDefaultPresetField = (
     }
   } else {
     switch (feature) {
+      case 'terrapleno':
+        fields = TERRAPLENO_FIELDS;
+        normSet = terraplenoNormSet;
+        break;
       case 'eps_defensa':
         fields = EPS_DEFENSA_FIELDS;
         normSet = epsDefensaNormSet;
@@ -477,6 +553,7 @@ export const isDefaultPresetField = (
     const photoNum = parseInt(photoMatch[1], 10);
     if (isTurbo) {
       if (
+        feature === 'terrapleno' ||
         feature === 'eps_defensa' ||
         feature === 'drenagem_profunda' ||
         feature === 'drenagem_superficial'
@@ -509,7 +586,7 @@ export const isDefaultPresetField = (
     ) {
       return photoNum >= 1 && photoNum <= 15;
     }
-    // drenagem_profunda, drenagem_superficial (standard preset: 1 to 15)
+    // terrapleno, drenagem_profunda, drenagem_superficial (standard preset: 1 to 15)
     return photoNum >= 1 && photoNum <= 15;
   }
 
@@ -719,6 +796,88 @@ export const isDefaultPresetField = (
     ) {
       return true;
     }
+  } else if (feature === 'terrapleno') {
+    // Explicit exclusions for Turbo mode
+    if (isTurbo) {
+      if (
+        norm === 'status' ||
+        norm.includes('ausencia') ||
+        norm.includes('problemasemergenciais') ||
+        norm.includes('movimentosgravitacionais') ||
+        norm.includes('segurancadosusuarios') ||
+        norm.includes('classificacaoderiscos')
+      ) {
+        return false;
+      }
+    }
+
+    if (
+      norm === 'fotoanterior' ||
+      norm === 'foto_anterior' ||
+      norm === 'imagemanterior' ||
+      norm === 'fotoant'
+    ) {
+      return true;
+    }
+    if (
+      norm === 'codauto' ||
+      norm === 'codigo' ||
+      norm === 'cod_auto' ||
+      norm === 'id' ||
+      norm === 'item'
+    ) {
+      return true;
+    }
+    if (norm === 'situacao' || norm === 'situação') {
+      return true;
+    }
+    if (!isTurbo) {
+      if (norm === 'status' || norm === 'condicao') {
+        return true;
+      }
+      if (
+        norm === 'identificacao2s2026' ||
+        norm === 'identificacao2s' ||
+        norm === 'identificacao' ||
+        norm.startsWith('identificacao')
+      ) {
+        return true;
+      }
+    }
+    if (norm === 'lado' || norm === 'bordo') {
+      return true;
+    }
+    if (norm === 'km') {
+      return true;
+    }
+    if (
+      norm === 'kmfinal' ||
+      norm === 'km_final' ||
+      norm === 'kmfim' ||
+      norm === 'km_fim'
+    ) {
+      return true;
+    }
+    if (norm === 'rodovia' || norm === 'rodovias' || norm === 'br') {
+      return true;
+    }
+    if (norm === 'sentido') {
+      return true;
+    }
+    if (
+      norm === 'nivelrisco20262sem' ||
+      norm === 'nivelrisco2s2026' ||
+      norm === 'nivelrisco2sem2026' ||
+      norm === 'nivelrisco' ||
+      norm === 'nivelderisco' ||
+      norm === 'grauderisco' ||
+      norm === 'risco'
+    ) {
+      return true;
+    }
+    if (!isTurbo && norm.includes('risco')) {
+      return true;
+    }
   }
 
   return false;
@@ -731,7 +890,73 @@ export function matchesEstadoFilterFrontend(itemVal: string, filterVal: string):
 
   if (!itemNorm) return false;
   if (itemNorm === filterNorm) return true;
-  if (itemNorm.includes(filterNorm) || filterNorm.includes(itemNorm)) return true;
+  if (itemNorm.length >= 4 && filterNorm.length >= 4 && itemNorm.includes(filterNorm)) return true;
+
+  const isFilterR1 = filterNorm === 'r1' || filterNorm.endsWith('r1');
+  const isFilterR2 = filterNorm === 'r2' || filterNorm.endsWith('r2');
+  const isFilterR3 = filterNorm === 'r3' || filterNorm.endsWith('r3');
+  const isFilterR4 = filterNorm === 'r4' || filterNorm.endsWith('r4');
+
+  if (isFilterR4) {
+    if (
+      itemNorm === 'r4' ||
+      itemNorm.includes('r4') ||
+      itemNorm.includes('risco4') ||
+      itemNorm.includes('nivel4') ||
+      itemNorm.includes('grau4') ||
+      itemNorm === '4' ||
+      /^4[\s\-_]/.test(itemVal.trim()) ||
+      /[\s\-_(]4[)\s\-_]?$/.test(itemVal.trim())
+    ) {
+      return true;
+    }
+    return false;
+  }
+  if (isFilterR3) {
+    if (
+      itemNorm === 'r3' ||
+      itemNorm.includes('r3') ||
+      itemNorm.includes('risco3') ||
+      itemNorm.includes('nivel3') ||
+      itemNorm.includes('grau3') ||
+      itemNorm === '3' ||
+      /^3[\s\-_]/.test(itemVal.trim()) ||
+      /[\s\-_(]3[)\s\-_]?$/.test(itemVal.trim())
+    ) {
+      return true;
+    }
+    return false;
+  }
+  if (isFilterR2) {
+    if (
+      itemNorm === 'r2' ||
+      itemNorm.includes('r2') ||
+      itemNorm.includes('risco2') ||
+      itemNorm.includes('nivel2') ||
+      itemNorm.includes('grau2') ||
+      itemNorm === '2' ||
+      /^2[\s\-_]/.test(itemVal.trim()) ||
+      /[\s\-_(]2[)\s\-_]?$/.test(itemVal.trim())
+    ) {
+      return true;
+    }
+    return false;
+  }
+  if (isFilterR1) {
+    if (
+      itemNorm === 'r1' ||
+      itemNorm.includes('r1') ||
+      itemNorm.includes('risco1') ||
+      itemNorm.includes('nivel1') ||
+      itemNorm.includes('grau1') ||
+      itemNorm === '1' ||
+      /^1[\s\-_]/.test(itemVal.trim()) ||
+      /[\s\-_(]1[)\s\-_]?$/.test(itemVal.trim())
+    ) {
+      return true;
+    }
+    return false;
+  }
 
   const isFilterReprovado =
     filterNorm.startsWith('reprovad') ||
@@ -774,8 +999,7 @@ export function matchesEstadoFilterFrontend(itemVal: string, filterVal: string):
   if (isFilterRegular) {
     return (
       itemNorm.startsWith('regula') ||
-      itemNorm === 'reg' ||
-      itemNorm === 'r'
+      itemNorm === 'reg'
     );
   }
   if (isFilterAprovado) {
@@ -792,11 +1016,87 @@ export function matchesEstadoFilterFrontend(itemVal: string, filterVal: string):
   if (isFilterPrecario) {
     return (
       itemNorm.startsWith('precar') ||
+      itemNorm === 'prec' ||
       itemNorm.includes('ruim') ||
       itemNorm.includes('pessimo') ||
       itemNorm.startsWith('reprovad') ||
       itemNorm.includes('critico')
     );
+  }
+
+  return false;
+}
+
+export function extractHighwayPrefixAndNumber(val: string): { prefix: string; number: string; clean: string } {
+  if (!val) return { prefix: '', number: '', clean: '' };
+  const clean = val.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+  const match = clean.match(/\b([A-Z]{2})[\s\/\-_]?(\d{2,4})\b/);
+  if (match) {
+    return {
+      prefix: match[1].toLowerCase(),
+      number: match[2],
+      clean: clean.replace(/[^A-Z0-9]/g, '').toLowerCase(),
+    };
+  }
+
+  const numMatch = clean.match(/\b(\d{2,4})\b/);
+  const digits = numMatch ? numMatch[1] : '';
+  const cleanOnly = clean.replace(/[^A-Z0-9]/g, '').toLowerCase();
+
+  return { prefix: '', number: digits, clean: cleanOnly };
+}
+
+export function matchesRodoviaFilterFrontend(
+  cellValue: string,
+  filter: string,
+  featureType?: string
+): boolean {
+  if (!filter || filter.toUpperCase() === 'TODAS' || filter.toUpperCase() === 'TODOS') return true;
+  if (!cellValue) return false;
+
+  const rawCell = String(cellValue).trim();
+  const rawFilter = String(filter).trim();
+
+  if (featureType === 'eps_defensa') {
+    const normFilter = normalizeRodoviaForFeature(rawFilter, 'eps_defensa');
+    const normCell = normalizeRodoviaForFeature(rawCell, 'eps_defensa');
+    if (normFilter === 'BR/376' && normCell === 'BR/376') {
+      return true;
+    }
+  }
+
+  const cellMeta = extractHighwayPrefixAndNumber(rawCell);
+  const filterMeta = extractHighwayPrefixAndNumber(rawFilter);
+
+  if (!cellMeta.clean || !filterMeta.clean) return false;
+
+  // Exact clean string match
+  if (cellMeta.clean === filterMeta.clean) return true;
+
+  // Disallow match if prefixes conflict (e.g. 'br' vs 'pr')
+  if (cellMeta.prefix && filterMeta.prefix && cellMeta.prefix !== filterMeta.prefix) {
+    return false;
+  }
+
+  // Same number and non-conflicting prefixes
+  if (cellMeta.number && filterMeta.number && cellMeta.number === filterMeta.number) {
+    if (cellMeta.prefix && filterMeta.prefix && cellMeta.prefix === filterMeta.prefix) {
+      return true;
+    }
+    if (!cellMeta.prefix || !filterMeta.prefix) {
+      return true;
+    }
+  }
+
+  // Substring match only if both clean strings are long enough and no prefix conflict
+  if (cellMeta.clean.length >= 4 && filterMeta.clean.length >= 4) {
+    if (cellMeta.prefix && filterMeta.prefix && cellMeta.prefix !== filterMeta.prefix) {
+      return false;
+    }
+    if (cellMeta.clean.includes(filterMeta.clean) || filterMeta.clean.includes(cellMeta.clean)) {
+      return true;
+    }
   }
 
   return false;
