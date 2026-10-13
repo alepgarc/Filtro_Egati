@@ -47,6 +47,7 @@ interface TurboModeModalProps {
   onBackToUpload?: () => void;
   parcialNumber?: string;
   onParcialChange?: (parcial: string) => void;
+  partsList?: string[];
 }
 
 interface RodoviaProcessItem {
@@ -181,14 +182,22 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
   onBackToUpload,
   parcialNumber = '1',
   onParcialChange,
+  partsList,
 }) => {
   const [localParcial, setLocalParcial] = useState<string>(parcialNumber || '1');
+  const [currentPartsList, setCurrentPartsList] = useState<string[] | undefined>(partsList);
 
   useEffect(() => {
     if (parcialNumber) {
       setLocalParcial(parcialNumber);
     }
   }, [parcialNumber]);
+
+  useEffect(() => {
+    if (partsList && partsList.length > 0) {
+      setCurrentPartsList(partsList);
+    }
+  }, [partsList]);
 
   const handleParcialSelect = (val: string) => {
     setLocalParcial(val);
@@ -284,13 +293,17 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
         targetSheets.map(async (tab) => {
           try {
             const res = await fetch(
-              `/api/sheet-details/${fileId}/${encodeURIComponent(tab)}?featureType=${featureType}`
+              `/api/sheet-details/${fileId}/${encodeURIComponent(tab)}?featureType=${featureType}&parcialNumber=${encodeURIComponent(localParcial)}`
             );
             if (res.ok) {
               const text = await res.text();
               const json = JSON.parse(text);
               const details: SheetDetails = json.sheetDetails || json;
               newTabsData[tab] = details;
+              const apiPartsList = json.partsList || details.partsList;
+              if (apiPartsList && Array.isArray(apiPartsList) && apiPartsList.length > 0) {
+                setCurrentPartsList(apiPartsList);
+              }
             }
           } catch (err) {
             console.warn(`Could not load details for tab ${tab}:`, err);
@@ -486,33 +499,37 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
 
   const totalFilteredRecords = summaryItems.reduce((acc, it) => acc + getItemRowCount(it), 0);
 
+  const getOriginalFilesDisplay = () => {
+    if (currentPartsList && currentPartsList.length > 1) {
+      return currentPartsList.join(', ');
+    }
+    return originalFileName || 'Planilha Original';
+  };
+
   const generateWhatsAppSummaryText = () => {
     const lines: string[] = [
-      `📋 *RESUMO DO PROCESSAMENTO*`,
+      ` ${featureConfig.name.toUpperCase()} - PARCIAL ${localParcial || '1'}`,
       `━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-      `📌 *Feature:* ${featureConfig.name}`,
-      `📁 *Arquivo Original:* ${originalFileName}`,
-      `🔢 *Parcial:* Parcial ${localParcial || '1'}`,
-      `🔍 *Filtro Aplicado:* ${selectedEstadoFilter}`,
+      `📌 Feature: ${featureConfig.name}`,
+      `📁 Arquivo Original: ${getOriginalFilesDisplay()}`,
+      `🔢 Parcial: Parcial ${localParcial || '1'}`,
+      `🔍 Filtro Aplicado: ${selectedEstadoFilter}`,
       ``,
-      `🛣️ *O que foi filtrado (Rodovias e Quantidades):*`,
+      `🛣️ O que foi filtrado (Rodovias e Quantidades):`,
     ];
 
-    summaryItems.forEach((item) => {
-      const count = getItemRowCount(item);
-      const tabStr = item.tabName ? `[${item.tabName}] ` : '';
-      lines.push(`• ${tabStr}${item.rodovia}: *${count} ${count === 1 ? 'registro' : 'registros'}*`);
-    });
+    const itemsToReport = summaryItems.filter((it) => getItemRowCount(it) > 0);
+    if (itemsToReport.length === 0) {
+      lines.push(`* Nenhum registro encontrado para o filtro aplicado`);
+    } else {
+      itemsToReport.forEach((item) => {
+        const count = getItemRowCount(item);
+        const tabStr = item.tabName ? `[${item.tabName}] ` : '';
+        lines.push(`* ${tabStr}${item.rodovia}: ${count} registros`);
+      });
+    }
 
-    lines.push(``);
-    lines.push(`📊 *Total de Rodovias:* ${summaryItems.length}`);
-    lines.push(`📈 *Total Geral de Registros:* ${totalFilteredRecords}`);
-    const now = new Date();
-    const dateFormatted = now.toLocaleDateString('pt-BR');
-    const timeFormatted = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    lines.push(`📅 *Data:* ${dateFormatted} às ${timeFormatted}`);
     lines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-
     return lines.join('\n');
   };
 
@@ -1072,9 +1089,9 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                       </span>
                       <span
                         className="font-bold text-slate-800 text-xs block truncate"
-                        title={originalFileName}
+                        title={getOriginalFilesDisplay()}
                       >
-                        {originalFileName}
+                        {getOriginalFilesDisplay()}
                       </span>
                     </div>
 
@@ -1169,7 +1186,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                     <textarea
                       readOnly
                       value={generateWhatsAppSummaryText()}
-                      rows={9}
+                      rows={12}
                       className="w-full text-xs font-mono bg-slate-900 text-emerald-300 p-3 rounded-xl border border-slate-800 focus:outline-none resize-none leading-relaxed selection:bg-emerald-500 selection:text-black scrollbar-thin"
                     />
                   </div>

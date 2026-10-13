@@ -84,6 +84,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
   // Row filters
   const [estadoFilter, setEstadoFilter] = useState<string>('');
   const [rodoviaFilter, setRodoviaFilter] = useState<string>('');
+  const [observacaoFilter, setObservacaoFilter] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
 
   // Turbo Mode Modal state
@@ -331,12 +332,13 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
     if (!sheetDetails.rowFiltersData || sheetDetails.rowFiltersData.length === 0) {
       return sheetDetails.totalRows;
     }
-    if (!estadoFilter && !rodoviaFilter) {
+    if (!estadoFilter && !rodoviaFilter && !observacaoFilter) {
       return sheetDetails.totalRows;
     }
     return sheetDetails.rowFiltersData.filter((item) => {
       let matchesEstado = true;
       let matchesRodovia = true;
+      let matchesObservacao = true;
 
       if (estadoFilter) {
         matchesEstado = matchesEstadoFilterFrontend(item.e, estadoFilter);
@@ -346,9 +348,15 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
         matchesRodovia = matchesRodoviaFilterFrontend(item.r, rodoviaFilter, featureType);
       }
 
-      return matchesEstado && matchesRodovia;
+      if (observacaoFilter && item.o) {
+        matchesObservacao = item.o.toLowerCase().includes(observacaoFilter.toLowerCase());
+      } else if (observacaoFilter) {
+        matchesObservacao = false;
+      }
+
+      return matchesEstado && matchesRodovia && matchesObservacao;
     }).length;
-  }, [estadoFilter, rodoviaFilter, sheetDetails.rowFiltersData, sheetDetails.totalRows, featureType]);
+  }, [estadoFilter, rodoviaFilter, observacaoFilter, sheetDetails.rowFiltersData, sheetDetails.totalRows, featureType]);
 
   const isHorizontalFeature =
     featureType === 'sinalizacao_horizontal_dispositivo' ||
@@ -514,8 +522,8 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
         </div>
       </div>
 
-      {/* 2. Compact Filter Controls Row (3 Columns) */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+      {/* 2. Compact Filter Controls Row (3 or 4 Columns) */}
+      <div className={`grid gap-2 ${featureType === 'eps_defensa' ? 'grid-cols-1 md:grid-cols-4' : 'grid-cols-1 md:grid-cols-3'}`}>
         {/* Filter 1: Seleção Padrão */}
         <div
           id="card-selecao-padrao"
@@ -666,6 +674,42 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
             </button>
           )}
         </div>
+
+        {featureType === 'eps_defensa' && (
+          <div
+            id="card-filtro-observacao"
+            className={`p-2 rounded-xl border flex items-center justify-between gap-2 transition-all ${
+              observacaoFilter
+                ? 'bg-purple-50/90 border-purple-300 ring-1 ring-purple-400/20'
+                : 'bg-white border-slate-200'
+            }`}
+          >
+            <div className="flex items-center gap-1.5 min-w-0 flex-1">
+              <Search className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+              <div className="min-w-0 flex-1">
+                <div className="text-[11px] font-bold text-slate-800">
+                  Observação:
+                </div>
+                <input
+                  type="text"
+                  placeholder="Ex: Ausência de Refletor"
+                  value={observacaoFilter}
+                  onChange={(e) => setObservacaoFilter(e.target.value)}
+                  className="w-full text-xs font-semibold rounded border border-slate-200 bg-white py-0.5 px-1 focus:outline-none focus:ring-1 focus:ring-purple-500 mt-0.5"
+                />
+              </div>
+            </div>
+            {observacaoFilter && (
+              <button
+                type="button"
+                onClick={() => setObservacaoFilter('')}
+                className="text-[10px] text-slate-500 hover:text-slate-800 underline shrink-0 px-1"
+              >
+                Limpar
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 3. Main Display Area: View Mode Switcher, Search, Bulk Actions & Content */}
@@ -960,6 +1004,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
         onBackToUpload={onBackToUpload}
         parcialNumber={parcialNumber}
         onParcialChange={onParcialChange}
+        partsList={uploadData.partsList}
       />
     </div>
   );

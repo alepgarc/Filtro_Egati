@@ -43,6 +43,11 @@ export const UploadStep: React.FC<UploadStepProps> = ({
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const lastSuccessDataRef = useRef<UploadResponse | null>(null);
+
+  const [uploadedPartsMap, setUploadedPartsMap] = useState<Record<string, string[]>>({});
+  const currentSessionKey = `${selectedFeature}_${parcialNumber}`;
+  const currentParts = uploadedPartsMap[currentSessionKey] || [];
 
   // Reset state and file input on mount or feature change
   useEffect(() => {
@@ -54,7 +59,7 @@ export const UploadStep: React.FC<UploadStepProps> = ({
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-  }, [selectedFeature]);
+  }, [selectedFeature, parcialNumber]);
 
   // Prevent browser from opening files dragged outside the dropzone
   useEffect(() => {
@@ -77,183 +82,238 @@ export const UploadStep: React.FC<UploadStepProps> = ({
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  const validateAndUpload = async (file: File) => {
-    setErrorMessage(null);
-
+  const uploadSingleFile = async (
+    file: File,
+    fileIndex: number,
+    totalFiles: number
+  ): Promise<UploadResponse> => {
     // 1. Validate file extension (.xlsx or .xls)
     const fileName = file.name.toLowerCase();
     if (!fileName.endsWith('.xlsx') && !fileName.endsWith('.xls')) {
-      setErrorMessage('Formato inválido! Por favor, selecione um arquivo Excel com extensão .xlsx ou .xls.');
-      return;
+      throw new Error(`Arquivo "${file.name}" possui formato inválido. Use apenas .xlsx ou .xls.`);
     }
 
-    // 2. Validate file size (600 MB maximum for high-resolution photo spreadsheets)
+    // 2. Validate file size (600 MB maximum)
     const MAX_SIZE = 600 * 1024 * 1024;
     if (file.size > MAX_SIZE) {
-      setErrorMessage(
-        `O arquivo ultrapassa o limite de 600 MB (${formatFileSize(file.size)}). Envie uma planilha de até 500-600 MB.`
+      throw new Error(
+        `O arquivo "${file.name}" ultrapassa o limite de 600 MB (${formatFileSize(file.size)}).`
       );
-      return;
     }
 
-    const CHUNK_SIZE = 8 * 1024 * 1024;
+    const CHUNK_SIZE = 16 * 1024 * 1024;
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     const uploadId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
     setSelectedFileName(file.name);
-    setIsUploading(true);
-    setUploadProgress(5);
     setUploadStatusText(
-      totalChunks > 1
+      totalFiles > 1
+        ? `[Planilha ${fileIndex + 1} de ${totalFiles}] Preparando ${file.name}...`
+        : totalChunks > 1
         ? `Preparando envio seguro em ${totalChunks} blocos de ${formatFileSize(CHUNK_SIZE)}...`
         : 'Enviando arquivo para o servidor...'
     );
+
+    let finalData: UploadResponse | null = null;
+
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+      const start = chunkIndex * CHUNK_SIZE;
+      const end = Math.min(file.size, start + CHUNK_SIZE);
+      const isLastChunk = chunkIndex === totalChunks - 1;
+
+      if (totalFiles > 1) {
+        setUploadStatusText(
+          `[Planilha ${fileIndex + 1} de ${totalFiles}] ${file.name} - Bloco ${chunkIndex + 1}/${totalChunks} (${formatFileSize(end)} de ${formatFileSize(file.size)})`
+        );
+      } else if (totalChunks > 1) {
+        setUploadStatusText(
+          isLastChunk
+            ? `Enviando e montando bloco final ${chunkIndex + 1} de ${totalChunks}...`
+            : `Enviando bloco ${chunkIndex + 1} de ${totalChunks} (${formatFileSize(end)} de ${formatFileSize(file.size)})...`
+        );
+      }
+
+      // Check if chunk already exists on server
+      try {
+        const statusRes = await fetch(`/api/upload-status/${uploadId}`, { credentials: 'include' });
+        if (statusRes.ok) {
+          const statusJson = await statusRes.json();
+          if (Array.isArray(statusJson.parts) && statusJson.parts.includes(chunkIndex)) {
+            if (!isLastChunk) {
+              continue;
+            }
+          }
+        }
+      } catch {}
+
+      let attempts = 0;
+      let success = false;
+      let lastError: Error | null = null;
+
+      while (attempts < 8 && !success) {
+        attempts++;
+
+        if (attempts > 1) {
+          try {
+            const statusRes = await fetch(`/api/upload-status/${uploadId}`, { credentials: 'include' });
+            if (statusRes.ok) {
+              const statusJson = await statusRes.json();
+              if (Array.isArray(statusJson.parts) && statusJson.parts.includes(chunkIndex)) {
+                success = true;
+                break;
+              }
+            }
+          } catch {}
+        }
+
+        const chunkBlob = file.slice(start, end);
+        const formData = new FormData();
+        formData.append('chunk', chunkBlob, file.name);
+        formData.append('chunkIndex', String(chunkIndex));
+        formData.append('totalChunks', String(totalChunks));
+        formData.append('uploadId', uploadId);
+        formData.append('fileName', file.name);
+        formData.append('featureType', selectedFeature);
+        formData.append('parcialNumber', parcialNumber);
+
+        try {
+          const chunkRes = await new Promise<any>((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/upload-chunk', true);
+            xhr.withCredentials = true;
+            xhr.timeout = isLastChunk ? 20 * 60 * 1000 : 5 * 60 * 1000;
+
+            xhr.upload.onprogress = (evt) => {
+              if (evt.lengthComputable) {
+                const chunkFraction = evt.loaded / evt.total;
+                const fileBaseFraction = (chunkIndex + chunkFraction) / totalChunks;
+                const overallPercent = Math.min(
+                  95,
+                  Math.round(((fileIndex + fileBaseFraction) / totalFiles) * 95)
+                );
+                setUploadProgress(Math.max(5, overallPercent));
+              }
+            };
+
+            xhr.onload = () => {
+              if (xhr.status >= 200 && xhr.status < 300) {
+                try {
+                  const resJson = JSON.parse(xhr.responseText);
+                  resolve(resJson);
+                } catch (e) {
+                  resolve({ status: 'ok' });
+                }
+              } else {
+                try {
+                  const resJson = JSON.parse(xhr.responseText);
+                  reject(new Error(resJson.error || `Erro HTTP ${xhr.status} no servidor.`));
+                } catch {
+                  reject(new Error(`Erro no servidor (${xhr.status}).`));
+                }
+              }
+            };
+
+            xhr.onerror = () => {
+              reject(
+                new Error(
+                  `Falha de conexão ao enviar o bloco ${chunkIndex + 1} de ${totalChunks}.`
+                )
+              );
+            };
+
+            xhr.ontimeout = () => {
+              reject(
+                new Error(
+                  `Tempo limite excedido ao enviar o bloco ${chunkIndex + 1} de ${totalChunks}.`
+                )
+              );
+            };
+
+            xhr.send(formData);
+          });
+
+          success = true;
+          if (isLastChunk) {
+            finalData = chunkRes;
+          }
+        } catch (chunkErr: any) {
+          lastError = chunkErr;
+          if (attempts < 8) {
+            setUploadStatusText(
+              `Reconectando bloco ${chunkIndex + 1}/${totalChunks} (tentativa ${attempts + 1}/8)...`
+            );
+            try {
+              await fetch('/api/health', { credentials: 'include' });
+            } catch {}
+            await new Promise((r) => setTimeout(r, Math.min(6000, attempts * 1500)));
+          }
+        }
+      }
+
+      if (!success) {
+        throw (
+          lastError ||
+          new Error(
+            `Falha ao enviar o bloco ${chunkIndex + 1} de ${totalChunks} de "${file.name}".`
+          )
+        );
+      }
+
+      await new Promise((r) => setTimeout(r, 150));
+    }
+
+    if (!finalData || !finalData.fileId) {
+      throw new Error((finalData as any)?.error || `Erro ao processar estrutura de "${file.name}".`);
+    }
+
+    return finalData;
+  };
+
+  const validateAndUploadFiles = async (files: File[]) => {
+    if (!files || files.length === 0) return;
+    setErrorMessage(null);
+    setIsUploading(true);
+    setUploadProgress(5);
+
+    // If uploading multiple files together in a single action, reset the session first so they form a fresh set
+    if (files.length > 1) {
+      try {
+        await fetch('/api/reset-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ featureType: selectedFeature, parcialNumber }),
+        });
+      } catch (err) {
+        console.warn('Reset session before batch failed:', err);
+      }
+    }
 
     const keepAliveTimer = setInterval(() => {
       fetch('/api/health', { credentials: 'include' }).catch(() => {});
     }, 20000);
 
     try {
-      let finalData: UploadResponse | null = null;
-
-      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-        const start = chunkIndex * CHUNK_SIZE;
-        const end = Math.min(file.size, start + CHUNK_SIZE);
-        const isLastChunk = chunkIndex === totalChunks - 1;
-
-        if (totalChunks > 1) {
-          setUploadStatusText(
-            isLastChunk
-              ? `Enviando e montando bloco final ${chunkIndex + 1} de ${totalChunks}...`
-              : `Enviando bloco ${chunkIndex + 1} de ${totalChunks} (${formatFileSize(end)} de ${formatFileSize(file.size)})...`
-          );
-        }
-
-        let attempts = 0;
-        let success = false;
-        let lastError: Error | null = null;
-
-        while (attempts < 6 && !success) {
-          attempts++;
-
-          if (attempts > 1) {
-            try {
-              const statusRes = await fetch(`/api/upload-status/${uploadId}`, { credentials: 'include' });
-              if (statusRes.ok) {
-                const statusJson = await statusRes.json();
-                if (Array.isArray(statusJson.parts) && statusJson.parts.includes(chunkIndex)) {
-                  success = true;
-                  break;
-                }
-              }
-            } catch {}
-          }
-
-          const chunkBlob = file.slice(start, end);
-          const formData = new FormData();
-          formData.append('chunk', chunkBlob, file.name);
-          formData.append('chunkIndex', String(chunkIndex));
-          formData.append('totalChunks', String(totalChunks));
-          formData.append('uploadId', uploadId);
-          formData.append('fileName', file.name);
-          formData.append('featureType', selectedFeature);
-
-          try {
-            const chunkRes = await new Promise<any>((resolve, reject) => {
-              const xhr = new XMLHttpRequest();
-              xhr.open('POST', '/api/upload-chunk', true);
-              xhr.withCredentials = true;
-              xhr.timeout = isLastChunk ? 10 * 60 * 1000 : 4 * 60 * 1000;
-
-              xhr.upload.onprogress = (evt) => {
-                if (evt.lengthComputable) {
-                  const chunkFraction = evt.loaded / evt.total;
-                  const overallPercent = Math.min(
-                    95,
-                    Math.round(((chunkIndex + chunkFraction) / totalChunks) * 95)
-                  );
-                  setUploadProgress(Math.max(5, overallPercent));
-                }
-              };
-
-              xhr.onload = () => {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                  try {
-                    const resJson = JSON.parse(xhr.responseText);
-                    resolve(resJson);
-                  } catch (e) {
-                    resolve({ status: 'ok' });
-                  }
-                } else {
-                  try {
-                    const resJson = JSON.parse(xhr.responseText);
-                    reject(new Error(resJson.error || `Erro HTTP ${xhr.status} no servidor.`));
-                  } catch {
-                    reject(new Error(`Erro no servidor (${xhr.status}).`));
-                  }
-                }
-              };
-
-              xhr.onerror = () => {
-                reject(
-                  new Error(
-                    `Falha de conexão com o servidor ao enviar o bloco ${chunkIndex + 1} de ${totalChunks}.`
-                  )
-                );
-              };
-
-              xhr.ontimeout = () => {
-                reject(
-                  new Error(
-                    `Tempo limite excedido ao enviar o bloco ${chunkIndex + 1} de ${totalChunks}.`
-                  )
-                );
-              };
-
-              xhr.send(formData);
-            });
-
-            success = true;
-            if (isLastChunk) {
-              finalData = chunkRes;
-            }
-          } catch (chunkErr: any) {
-            lastError = chunkErr;
-            if (attempts < 6) {
-              setUploadStatusText(
-                `Reconectando bloco ${chunkIndex + 1}/${totalChunks} (tentativa ${attempts + 1}/6)...`
-              );
-              try {
-                await fetch('/api/health', { credentials: 'include' });
-              } catch {}
-              await new Promise((r) => setTimeout(r, Math.min(5000, attempts * 1200)));
-            }
-          }
-        }
-
-        if (!success) {
-          throw (
-            lastError ||
-            new Error(
-              `Falha ao enviar o bloco ${chunkIndex + 1} de ${totalChunks} após múltiplas tentativas de conexão.`
-            )
-          );
-        }
+      let lastData: UploadResponse | null = null;
+      for (let i = 0; i < files.length; i++) {
+        lastData = await uploadSingleFile(files[i], i, files.length);
       }
 
-      setUploadStatusText('Planilha recebida com sucesso! Analisando abas e colunas...');
-      setUploadProgress(98);
+      setUploadStatusText('Planilhas recebidas e consolidadas com sucesso!');
+      setUploadProgress(100);
+      setIsUploading(false);
 
-      if (finalData && finalData.fileId) {
-        setUploadProgress(100);
-        setIsUploading(false);
-        if (fileInputRef.current) {
-          fileInputRef.current.value = '';
-        }
-        finalData.featureType = selectedFeature;
-        onUploadSuccess(finalData);
-      } else {
-        throw new Error((finalData as any)?.error || 'Erro ao processar estrutura da planilha.');
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+
+      if (lastData && lastData.fileId) {
+        lastData.featureType = selectedFeature;
+        lastSuccessDataRef.current = lastData;
+        const list = lastData.partsList || files.map((f) => f.name);
+        setUploadedPartsMap((prev) => ({
+          ...prev,
+          [currentSessionKey]: list,
+        }));
       }
     } catch (err: any) {
       setIsUploading(false);
@@ -265,6 +325,10 @@ export const UploadStep: React.FC<UploadStepProps> = ({
     } finally {
       clearInterval(keepAliveTimer);
     }
+  };
+
+  const validateAndUpload = async (file: File) => {
+    await validateAndUploadFiles([file]);
   };
 
   const handleDragEnter = (e: React.DragEvent) => {
@@ -294,15 +358,29 @@ export const UploadStep: React.FC<UploadStepProps> = ({
     setIsDragging(false);
 
     if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const file = e.dataTransfer.files[0];
-      validateAndUpload(file);
+      const filesList: File[] = Array.from(e.dataTransfer.files);
+      const validFiles = filesList.filter((f) => {
+        const n = f.name.toLowerCase();
+        return n.endsWith('.xlsx') || n.endsWith('.xls');
+      });
+      if (validFiles.length > 0) {
+        validateAndUploadFiles(validFiles);
+      } else {
+        setErrorMessage('Formato inválido! Por favor, selecione arquivos Excel com extensão .xlsx ou .xls.');
+      }
     }
   };
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      const file = e.target.files[0];
-      validateAndUpload(file);
+      const filesList: File[] = Array.from(e.target.files);
+      const validFiles = filesList.filter((f) => {
+        const n = f.name.toLowerCase();
+        return n.endsWith('.xlsx') || n.endsWith('.xls');
+      });
+      if (validFiles.length > 0) {
+        validateAndUploadFiles(validFiles);
+      }
     }
     e.target.value = '';
   };
@@ -429,6 +507,7 @@ export const UploadStep: React.FC<UploadStepProps> = ({
         <input
           ref={fileInputRef}
           type="file"
+          multiple
           accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
           className="hidden"
           onChange={handleFileInputChange}
@@ -444,10 +523,10 @@ export const UploadStep: React.FC<UploadStepProps> = ({
         </div>
 
         <h3 className="text-sm sm:text-base font-bold text-slate-800 tracking-tight pointer-events-none">
-          {isUploading ? 'Enviando e analisando planilha...' : `Clique ou arraste a planilha de ${currentFeatureConfig.name}`}
+          {isUploading ? 'Enviando e consolidando planilhas...' : `Clique ou arraste a planilha (ou múltiplas partes em conjunto) de ${currentFeatureConfig.name}`}
         </h3>
         <p className="text-xs text-slate-500 mt-0.5 max-w-md mx-auto pointer-events-none">
-          Suporte a arquivos <strong className="text-slate-700 font-semibold">.xlsx</strong> e <strong className="text-slate-700 font-semibold">.xls</strong> de até <strong className="text-slate-700 font-semibold">500 MB</strong> com fotos
+          Envio único ou em conjunto (Partes 1, 2, ...) em <strong className="text-slate-700 font-semibold">.xlsx</strong> e <strong className="text-slate-700 font-semibold">.xls</strong> de até <strong className="text-slate-700 font-semibold">500 MB</strong>
         </p>
 
         {/* Upload Progress Bar */}
@@ -484,6 +563,74 @@ export const UploadStep: React.FC<UploadStepProps> = ({
           </span>
         </div>
       </div>
+
+      {/* Uploaded Parts Management Card for Multi-Part Workbooks */}
+      {currentParts.length > 0 && !isUploading && (
+        <div className="bg-emerald-50/90 border border-emerald-300 rounded-xl p-4 space-y-3 shadow-2xs animate-in fade-in duration-200">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-emerald-700" />
+              <span className="text-xs font-bold text-emerald-950">
+                Partes carregadas para a Parcial {parcialNumber} ({currentParts.length} {currentParts.length === 1 ? 'parte' : 'partes'}):
+              </span>
+            </div>
+            <button
+              onClick={async () => {
+                await fetch('/api/reset-session', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ featureType: selectedFeature, parcialNumber }),
+                });
+                setUploadedPartsMap((prev) => {
+                  const next = { ...prev };
+                  delete next[currentSessionKey];
+                  return next;
+                });
+              }}
+              className="text-[10px] font-bold text-rose-700 hover:text-rose-900 px-2 py-0.5 rounded-full hover:bg-rose-100 transition-colors"
+            >
+              Limpar todas
+            </button>
+          </div>
+
+          <div className="space-y-1 bg-white border border-emerald-200 rounded-lg p-2.5 max-h-[140px] overflow-y-auto scrollbar-thin">
+            {currentParts.map((partName, idx) => (
+              <div key={idx} className="flex items-center justify-between text-xs text-slate-700 py-1 border-b border-slate-100 last:border-0">
+                <span className="font-semibold truncate flex items-center gap-1.5">
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  Parte {idx + 1}: {partName}
+                </span>
+                <span className="text-[10px] text-emerald-800 font-bold bg-emerald-50 px-2 py-0.5 rounded">
+                  Consolidada
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center justify-between flex-wrap gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="px-3.5 py-2 rounded-xl border border-emerald-400 bg-white hover:bg-emerald-50 text-emerald-900 font-bold text-xs transition-colors cursor-pointer flex items-center gap-1.5 shadow-2xs"
+            >
+              <span>+ Adicionar Outra Parte (Parte {currentParts.length + 1})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (lastSuccessDataRef.current) {
+                  lastSuccessDataRef.current.featureType = selectedFeature;
+                  onUploadSuccess(lastSuccessDataRef.current);
+                }
+              }}
+              className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
+            >
+              <span>Avançar para Seleção de Colunas →</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Error Alert */}
       {errorMessage && (

@@ -17,6 +17,7 @@ export interface ColumnInfo {
 export interface RowFilterItem {
   r: string;
   e: string;
+  o?: string;
 }
 
 export interface SheetDetails {
@@ -29,6 +30,7 @@ export interface SheetDetails {
   rowFiltersData?: RowFilterItem[];
   rodoviaCounts?: Record<string, number>;
   estadoCounts?: Record<string, number>;
+  partsList?: string[];
 }
 
 export interface UploadResponse {
@@ -39,6 +41,8 @@ export interface UploadResponse {
   activeSheet: string;
   sheetDetails: SheetDetails;
   featureType?: DrainageFeatureType;
+  partsList?: string[];
+  partsCount?: number;
 }
 
 export interface ProcessResponse {

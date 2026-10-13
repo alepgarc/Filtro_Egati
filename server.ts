@@ -18,6 +18,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import sharp from 'sharp';
 import * as xlsxModule from 'xlsx';
+import { RowFilterItem } from './src/types';
 
 const XLSX: any = (xlsxModule as any).default || xlsxModule;
 
@@ -499,6 +500,12 @@ function findRodoviaColumnIndex(headers: string[]): number {
   return idx;
 }
 
+function findObservacaoColumnIndex(headers: string[]): number {
+  if (!headers || headers.length === 0) return -1;
+  return headers.findIndex((h) => normalizeColKey(h) === 'observacao');
+}
+
+
 function isEstadoConservacaoCol(name: string): boolean {
   return isTargetRowStatusCol(name);
 }
@@ -576,36 +583,61 @@ function matchesEstadoFilter(cellValue: string, filter: string): boolean {
     );
   }
 
-  // Gender-neutral normalized matches
   const filterNorm = normalizeString(filter);
-  const isFilterReprovado =
-    filterNorm.startsWith('reprovad') ||
-    filterNorm === 'nok' ||
-    filterNorm === 'ruim' ||
-    filterNorm.includes('ruim') ||
-    filterNorm.includes('nc') ||
-    filterNorm.includes('naoconforme') ||
-    filterNorm.includes('pessimo');
+
+  const unsatisfactoryKeywords = [
+    'reprovad',
+    'precar',
+    'insatisfat',
+    'deficien',
+    'inadequad',
+    'critico',
+    'ruim',
+    'pessimo',
+    'naoconform',
+    'nc',
+    'nok',
+  ];
+
+  const isFilterUnsatisfactory = unsatisfactoryKeywords.some(
+    (kw) => filterNorm.includes(kw) || filterNorm === kw
+  );
+
+  if (isFilterUnsatisfactory) {
+    return unsatisfactoryKeywords.some(
+      (kw) => cellKey.includes(kw) || cellKey === kw
+    );
+  }
+
+  const satisfactoryKeywords = [
+    'aprovad',
+    'bom',
+    'boa',
+    'conforme',
+    'satisfatori',
+    'ok',
+    'atende',
+    'adequado',
+  ];
+
+  const isFilterSatisfactory = satisfactoryKeywords.some(
+    (kw) => filterNorm.includes(kw) || filterNorm === kw
+  );
+
+  if (isFilterSatisfactory) {
+    return satisfactoryKeywords.some(
+      (kw) => cellKey.includes(kw) || cellKey === kw
+    );
+  }
 
   const isFilterRegular =
     filterNorm.startsWith('regula') ||
     filterNorm === 'reg' ||
     filterNorm === 'r';
 
-  const isFilterAprovado =
-    filterNorm.startsWith('aprovad') ||
-    filterNorm === 'ok' ||
-    filterNorm === 'b' ||
-    filterNorm === 'boa' ||
-    filterNorm.startsWith('bom') ||
-    filterNorm.startsWith('boa') ||
-    filterNorm.includes('bom') ||
-    filterNorm.includes('conforme');
-
-  const isFilterPrecario =
-    filterNorm.startsWith('precar') ||
-    filterNorm === 'prec' ||
-    filterNorm.includes('critico');
+  if (isFilterRegular) {
+    return cellKey.startsWith('regula') || cellKey === 'reg';
+  }
 
   const isFilterSuficiente =
     filterNorm.startsWith('sufic') ||
@@ -613,55 +645,12 @@ function matchesEstadoFilter(cellValue: string, filter: string): boolean {
     filterNorm === 'sf' ||
     filterNorm === 's';
 
-  if (isFilterReprovado) {
-    return (
-      cellKey.startsWith('reprovad') ||
-      cellKey === 'nok' ||
-      cellKey === 'ruim' ||
-      cellKey.includes('ruim') ||
-      cellKey.includes('nc') ||
-      cellKey.includes('naoconforme') ||
-      cellKey.includes('pessimo')
-    );
-  }
-  if (isFilterRegular) {
-    return (
-      cellKey.startsWith('regula') ||
-      cellKey === 'reg'
-    );
-  }
-  if (isFilterAprovado) {
-    return (
-      cellKey.startsWith('aprovad') ||
-      cellKey === 'ok' ||
-      cellKey === 'b' ||
-      cellKey === 'boa' ||
-      cellKey.startsWith('bom') ||
-      cellKey.startsWith('boa') ||
-      cellKey.includes('bom') ||
-      cellKey.includes('conforme')
-    );
-  }
-  if (isFilterPrecario) {
-    return (
-      cellKey.startsWith('precar') ||
-      cellKey === 'prec' ||
-      cellKey.includes('ruim') ||
-      cellKey.includes('pessimo') ||
-      cellKey.startsWith('reprovad') ||
-      cellKey.includes('critico')
-    );
-  }
   if (isFilterSuficiente) {
-    return (
-      cellKey.startsWith('sufic') ||
-      cellKey === 'su' ||
-      cellKey === 'sf' ||
-      cellKey === 's'
-    );
+    return cellKey.startsWith('sufic') || cellKey === 'su' || cellKey === 'sf';
   }
 
-  return false;
+  // Fallback direct inclusion match
+  return cellKey.includes(filterNorm) || filterNorm.includes(cellKey);
 }
 
 function isRodoviaCol(name: string): boolean {
@@ -906,9 +895,10 @@ async function getSheetDetailsAsync(
 
     const rodoviaColIdx = findRodoviaColumnIndex(headerRow);
     const estadoColIdx = findStatusColumnIndex(headerRow, featureType);
+    const observacaoColIdx = featureType === 'eps_defensa' ? findObservacaoColumnIndex(headerRow) : -1;
 
     const dataStartIdx = headerRowIdx + 1;
-    const rowFiltersData: { r: string; e: string }[] = [];
+    const rowFiltersData: RowFilterItem[] = [];
     const rodoviaCounts: Record<string, number> = {};
     const estadoCounts: Record<string, number> = {};
     const uniqueRodovias = new Set<string>();
@@ -926,8 +916,17 @@ async function getSheetDetailsAsync(
         estadoColIdx >= 0 && row[estadoColIdx] !== undefined && row[estadoColIdx] !== null
           ? String(row[estadoColIdx]).trim()
           : '';
+      const oVal =
+        observacaoColIdx >= 0 && row[observacaoColIdx] !== undefined && row[observacaoColIdx] !== null
+          ? String(row[observacaoColIdx]).trim()
+          : '';
 
-      rowFiltersData.push({ r: rVal, e: eVal });
+      const filterItem: RowFilterItem = { r: rVal, e: eVal };
+      if (featureType === 'eps_defensa' && oVal) {
+        filterItem.o = oVal;
+      }
+
+      rowFiltersData.push(filterItem);
       if (rVal) {
         uniqueRodovias.add(rVal);
         rodoviaCounts[rVal] = (rodoviaCounts[rVal] || 0) + 1;
@@ -1059,12 +1058,150 @@ async function getSheetDetailsAsync(
   }
 }
 
+interface FeatureSessionPart {
+  fileId: string;
+  filePath: string;
+  originalName: string;
+  size: number;
+  uploadedAt: number;
+}
+interface FeatureSession {
+  masterFileId: string;
+  masterFilePath: string;
+  parts: FeatureSessionPart[];
+}
+const featureParcialSessions = new Map<string, FeatureSession>();
+
+function findFeatureSession(
+  fileId?: string,
+  featureType?: string,
+  parcialNumber?: string
+): FeatureSession | undefined {
+  if (fileId) {
+    for (const session of featureParcialSessions.values()) {
+      if (session.masterFileId === fileId || session.parts.some((p) => p.fileId === fileId)) {
+        return session;
+      }
+    }
+  }
+  const sessionKey = `${featureType || 'drenagem_profunda'}_parcial_${parcialNumber || '1'}`;
+  return featureParcialSessions.get(sessionKey);
+}
+
+interface MergeMetadata {
+  originalColumnsCount?: number;
+  removedColumnsCount?: number;
+  keptColumnsCount?: number;
+  totalOriginalRows?: number;
+  appliedEstadoFilter?: string | null;
+  appliedRodoviaFilter?: string | null;
+}
+
+async function mergeProcessedBuffers(buffers: Buffer[], meta?: MergeMetadata) {
+  if (buffers.length === 0) {
+    throw new Error('Nenhum buffer para consolidação.');
+  }
+  if (buffers.length === 1) {
+    const singleWb = new ExcelJS.Workbook();
+    await singleWb.xlsx.load(buffers[0]);
+    const singleWs = singleWb.worksheets[0];
+    const rowCount = singleWs ? Math.max(0, singleWs.rowCount - 1) : 0;
+    return {
+      buffer: buffers[0],
+      originalColumnsCount: meta?.originalColumnsCount || singleWs?.columnCount || 15,
+      removedColumnsCount: meta?.removedColumnsCount || 0,
+      keptColumnsCount: meta?.keptColumnsCount || singleWs?.columnCount || 15,
+      originalRowsCount: meta?.totalOriginalRows || rowCount,
+      keptRowsCount: rowCount,
+      removedRowsCount: 0,
+      rowsCount: rowCount,
+      appliedEstadoFilter: meta?.appliedEstadoFilter || null,
+      appliedRodoviaFilter: meta?.appliedRodoviaFilter || null,
+    };
+  }
+
+  const masterWb = new ExcelJS.Workbook();
+  await masterWb.xlsx.load(buffers[0]);
+
+  for (let i = 1; i < buffers.length; i++) {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buffers[i]);
+
+    for (const sheet of wb.worksheets) {
+      let masterSheet = masterWb.getWorksheet(sheet.name);
+      if (!masterSheet) {
+        masterSheet = masterWb.worksheets[0] || masterWb.addWorksheet(sheet.name);
+      }
+      const lastRow = masterSheet.rowCount;
+      const rowOffset = lastRow > 0 ? lastRow - 1 : 0;
+
+      sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+        if (rowNumber === 1 && lastRow > 0) return; // skip duplicate header row
+        const values = Array.isArray(row.values) ? row.values.slice(1) : row.values;
+        const newRow = masterSheet!.addRow(values);
+        if (row.height) {
+          newRow.height = row.height;
+        } else {
+          newRow.height = 75;
+        }
+      });
+
+      const images = (sheet as any).getImages ? (sheet as any).getImages() : [];
+      for (const img of images) {
+        try {
+          const media = wb.getImage(Number(img.imageId));
+          if (media) {
+            const addedId = masterWb.addImage({
+              buffer: media.buffer,
+              extension: (media.extension as any) || 'jpeg',
+            });
+
+            const newRow0 = Math.round(img.range.tl.row) + rowOffset;
+            const targetCol = Math.floor(img.range.tl.col);
+
+            masterSheet.addImage(addedId, {
+              tl: { col: targetCol, row: newRow0 },
+              ext: { width: 120, height: 90 },
+              editAs: 'oneCell',
+            } as any);
+          }
+        } catch (imgErr) {
+          console.warn('Error copying image in mergeProcessedBuffers:', imgErr);
+        }
+      }
+    }
+  }
+
+  // Format entire worksheet to ensure clean layout, 75pt row height for photo rows, and cell borders
+  for (const ws of masterWb.worksheets) {
+    formatWorksheetLayout(ws);
+  }
+
+  const finalBuffer = Buffer.from(await masterWb.xlsx.writeBuffer());
+  const masterWs = masterWb.worksheets[0];
+  const rowCount = masterWs ? Math.max(0, masterWs.rowCount - 1) : 0;
+
+  return {
+    buffer: finalBuffer,
+    originalColumnsCount: meta?.originalColumnsCount || masterWs?.columnCount || 15,
+    removedColumnsCount: meta?.removedColumnsCount || 0,
+    keptColumnsCount: meta?.keptColumnsCount || masterWs?.columnCount || 15,
+    originalRowsCount: meta?.totalOriginalRows || rowCount,
+    keptRowsCount: rowCount,
+    removedRowsCount: Math.max(0, (meta?.totalOriginalRows || rowCount) - rowCount),
+    rowsCount: rowCount,
+    appliedEstadoFilter: meta?.appliedEstadoFilter || null,
+    appliedRodoviaFilter: meta?.appliedRodoviaFilter || null,
+  };
+}
+
 // Helper function to process completed upload (used by both direct upload and chunked upload)
 async function processCompletedUpload(
   uploadedFilePath: string,
   originalName: string,
   fileSize: number,
-  featureType: string
+  featureType: string,
+  parcialNumber: string = '1'
 ) {
   let filePath = uploadedFilePath;
   const originalExt = path.extname(originalName).toLowerCase();
@@ -1131,6 +1268,78 @@ async function processCompletedUpload(
     sheetNames,
   });
 
+  const sessionKey = `${featureType || 'drenagem_profunda'}_parcial_${parcialNumber || '1'}`;
+  let session = featureParcialSessions.get(sessionKey);
+
+  if (!session) {
+    session = {
+      masterFileId: fileId,
+      masterFilePath: filePath,
+      parts: [],
+    };
+    featureParcialSessions.set(sessionKey, session);
+  }
+
+  const existingPartIdx = session.parts.findIndex((p) => p.fileId === fileId || p.originalName === originalName);
+  if (existingPartIdx >= 0) {
+    session.parts[existingPartIdx] = {
+      fileId,
+      filePath,
+      originalName,
+      size: fileSize,
+      uploadedAt: Date.now(),
+    };
+  } else {
+    session.parts.push({
+      fileId,
+      filePath,
+      originalName,
+      size: fileSize,
+      uploadedAt: Date.now(),
+    });
+  }
+
+  if (session.parts.length > 0) {
+    const combinedRodovias = new Set<string>();
+    const combinedRodoviaCounts: Record<string, number> = {};
+    const combinedEstadoCounts: Record<string, number> = {};
+    const combinedRowFiltersData: { r: string; e: string }[] = [];
+    let totalRows = 0;
+
+    for (const part of session.parts) {
+      try {
+        const partDetails = await getSheetDetailsAsync(part.filePath, activeSheet, featureType);
+        totalRows += partDetails.totalRows;
+        if (partDetails.rodoviaOptions) {
+          partDetails.rodoviaOptions.forEach((r) => combinedRodovias.add(r));
+        }
+        if (partDetails.rodoviaCounts) {
+          for (const [k, v] of Object.entries(partDetails.rodoviaCounts)) {
+            combinedRodoviaCounts[k] = (combinedRodoviaCounts[k] || 0) + v;
+          }
+        }
+        if (partDetails.estadoCounts) {
+          for (const [k, v] of Object.entries(partDetails.estadoCounts)) {
+            combinedEstadoCounts[k] = (combinedEstadoCounts[k] || 0) + v;
+          }
+        }
+        if (partDetails.rowFiltersData) {
+          combinedRowFiltersData.push(...partDetails.rowFiltersData);
+        }
+      } catch (partErr) {
+        console.warn('Error reading part details:', partErr);
+      }
+    }
+
+    sheetDetails.rodoviaOptions = Array.from(combinedRodovias).sort((a, b) =>
+      a.localeCompare(b, 'pt-BR', { numeric: true, sensitivity: 'base' })
+    );
+    sheetDetails.rodoviaCounts = combinedRodoviaCounts;
+    sheetDetails.estadoCounts = combinedEstadoCounts;
+    sheetDetails.rowFiltersData = combinedRowFiltersData;
+    sheetDetails.totalRows = totalRows;
+  }
+
   return {
     fileId,
     originalName,
@@ -1139,6 +1348,8 @@ async function processCompletedUpload(
     activeSheet,
     sheetDetails,
     featureType,
+    partsCount: session.parts.length,
+    partsList: session.parts.map((p) => p.originalName),
   };
 }
 
@@ -1168,6 +1379,26 @@ app.get('/api/upload-status/:uploadId', (req, res) => {
   } catch {
     return res.json({ parts: [] });
   }
+});
+
+// Endpoint to reset session
+app.post('/api/reset-session', (req, res) => {
+  const { featureType, parcialNumber } = req.body;
+  const sessionKey = `${featureType || 'drenagem_profunda'}_parcial_${parcialNumber || '1'}`;
+  const session = featureParcialSessions.get(sessionKey);
+  
+  if (session) {
+    try {
+      if (fs.existsSync(session.masterFilePath)) fs.unlinkSync(session.masterFilePath);
+      for (const part of session.parts) {
+        if (fs.existsSync(part.filePath) && part.filePath !== session.masterFilePath) {
+          fs.unlinkSync(part.filePath);
+        }
+      }
+    } catch {}
+    featureParcialSessions.delete(sessionKey);
+  }
+  res.json({ success: true });
 });
 
 // 1. Chunked Upload endpoint (bypasses Cloud Run / proxy 32MB payload limit for large files)
@@ -1250,9 +1481,10 @@ app.post('/api/upload-chunk', (req, res) => {
           console.warn('Could not remove chunk dir:', rmErr);
         }
 
+        const parcialNumber = (req.body.parcialNumber as string) || '1';
         const stat = fs.statSync(finalFilePath);
         console.log(`[Upload] File assembled: ${finalFilePath} (${stat.size} bytes). Processing...`);
-        const result = await processCompletedUpload(finalFilePath, fileName, stat.size, featureType);
+        const result = await processCompletedUpload(finalFilePath, fileName, stat.size, featureType, parcialNumber);
         console.log(`[Upload] Successfully processed ${fileName} (${result.sheetNames.length} sheets)`);
 
         res.setHeader('Content-Type', 'application/json');
@@ -1297,12 +1529,14 @@ app.post('/api/upload', (req, res) => {
       const filePath = req.file.path;
       const originalName = fixFileNameEncoding(req.file.originalname);
       const featureType = (req.body?.featureType as string) || 'drenagem_profunda';
+      const parcialNumber = (req.body?.parcialNumber as string) || '1';
 
       const result = await processCompletedUpload(
         filePath,
         originalName,
         req.file.size,
-        featureType
+        featureType,
+        parcialNumber
       );
 
       res.setHeader('Content-Type', 'application/json');
@@ -1350,9 +1584,60 @@ const handleSheetDetails = async (req: express.Request, res: express.Response) =
 
   try {
     const sheetDetails = await getSheetDetailsAsync(fileInfo.filePath, sheetName, featureType);
+
+    const parcialNumber = (req.query.parcialNumber as string) || undefined;
+    const session = findFeatureSession(fileId, featureType, parcialNumber);
+    if (session && session.parts && session.parts.length > 0) {
+      const combinedRodovias = new Set<string>();
+      const combinedRodoviaCounts: Record<string, number> = {};
+      const combinedEstadoCounts: Record<string, number> = {};
+      const combinedRowFiltersData: { r: string; e: string }[] = [];
+      let totalRows = 0;
+
+      for (const part of session.parts) {
+        try {
+          const partDetails = await getSheetDetailsAsync(part.filePath, sheetName, featureType);
+          totalRows += partDetails.totalRows;
+          if (partDetails.rodoviaOptions) {
+            partDetails.rodoviaOptions.forEach((r) => combinedRodovias.add(r));
+          }
+          if (partDetails.rodoviaCounts) {
+            for (const [k, v] of Object.entries(partDetails.rodoviaCounts)) {
+              combinedRodoviaCounts[k] = (combinedRodoviaCounts[k] || 0) + v;
+            }
+          }
+          if (partDetails.estadoCounts) {
+            for (const [k, v] of Object.entries(partDetails.estadoCounts)) {
+              combinedEstadoCounts[k] = (combinedEstadoCounts[k] || 0) + v;
+            }
+          }
+          if (partDetails.rowFiltersData) {
+            combinedRowFiltersData.push(...partDetails.rowFiltersData);
+          }
+        } catch (partErr) {
+          console.warn('Error reading part details for sheet preview:', partErr);
+        }
+      }
+
+      sheetDetails.rodoviaOptions = Array.from(combinedRodovias).sort((a, b) =>
+        a.localeCompare(b, 'pt-BR', { numeric: true, sensitivity: 'base' })
+      );
+      sheetDetails.rodoviaCounts = combinedRodoviaCounts;
+      sheetDetails.estadoCounts = combinedEstadoCounts;
+      sheetDetails.rowFiltersData = combinedRowFiltersData;
+      sheetDetails.totalRows = totalRows;
+      (sheetDetails as any).partsList = session.parts.map((p) => p.originalName);
+    }
+
+    const sessionPartsList =
+      session && session.parts && session.parts.length > 0
+        ? session.parts.map((p) => p.originalName)
+        : undefined;
+
     res.json({
       sheetName,
       sheetDetails,
+      partsList: sessionPartsList,
       ...sheetDetails,
     });
   } catch (error: any) {
@@ -1411,8 +1696,10 @@ async function findSheetXmlPath(
         name.trim().toLowerCase() === sheetNameTarget?.trim().toLowerCase()
       ) {
         targetRelId = getSheetRelId(s);
+        console.log(`[findSheetXmlPath] Found sheet "${name}" for target "${sheetNameTarget}"`);
         break;
       }
+      console.log(`[findSheetXmlPath] Checking sheet "${name}" against "${sheetNameTarget}"`);
     }
 
     // 2. Normalized match (accents removed, whitespace and symbols collapsed)
@@ -1542,6 +1829,9 @@ async function processWorkbookWithZip(
   }
 
   // 3. Parse target sheet XML
+  if (!sheetPath || !zip.files[sheetPath]) {
+    throw new Error(`Sheet XML not found: ${sheetPath} (Target: ${sheetNameTarget})`);
+  }
   const sheetXmlStr = await zip.files[sheetPath].async('string');
   const sheetDom = parser.parseFromString(sheetXmlStr, 'text/xml');
 
@@ -2971,14 +3261,99 @@ app.post('/api/process', async (req, res) => {
   }
 
   try {
-    const processed = await processWorkbookWithZip(
-      fileInfo.filePath,
-      sheetName,
-      columnIndicesToRemove,
-      estadoConservacaoFilter,
-      rodoviaFilter,
-      featureType
-    );
+    const session = findFeatureSession(fileInfo.fileId, featureType, parcialNumber ? String(parcialNumber) : undefined);
+
+    let processed: any;
+    if (session && session.parts && session.parts.length > 0) {
+      const processedBuffers: Buffer[] = [];
+      const partsResults: any[] = [];
+      for (let pIdx = 0; pIdx < session.parts.length; pIdx++) {
+        const part = session.parts[pIdx];
+        if (fs.existsSync(part.filePath)) {
+          let successPart = false;
+          try {
+            const resPart = await processWorkbookWithZip(
+              part.filePath,
+              sheetName,
+              columnIndicesToRemove,
+              estadoConservacaoFilter,
+              rodoviaFilter,
+              featureType
+            );
+            if (resPart.buffer && resPart.buffer.length > 0) {
+              processedBuffers.push(Buffer.from(resPart.buffer));
+              partsResults.push(resPart);
+              successPart = true;
+            }
+          } catch (partErr: any) {
+            console.warn(`[MultiPart] Error processing part ${pIdx + 1} (${part.originalName}) with sheet "${sheetName}":`, partErr?.message);
+          }
+
+          if (!successPart) {
+            try {
+              const data = fs.readFileSync(part.filePath);
+              const zip = await JSZip.loadAsync(data);
+              const parser = new DOMParser();
+              const wbXmlStr = await zip.files['xl/workbook.xml']?.async('string');
+              if (wbXmlStr) {
+                const wbDom = parser.parseFromString(wbXmlStr, 'text/xml');
+                const sheets = Array.from(wbDom.getElementsByTagName('sheet'));
+                if (sheets.length > 0) {
+                  const fallbackSheetName = sheets[0].getAttribute('name') || sheetName;
+                  const resPartFallback = await processWorkbookWithZip(
+                    part.filePath,
+                    fallbackSheetName,
+                    columnIndicesToRemove,
+                    estadoConservacaoFilter,
+                    rodoviaFilter,
+                    featureType
+                  );
+                  if (resPartFallback.buffer && resPartFallback.buffer.length > 0) {
+                    processedBuffers.push(Buffer.from(resPartFallback.buffer));
+                    partsResults.push(resPartFallback);
+                    console.log(`[MultiPart] Successfully processed part ${pIdx + 1} using fallback sheet "${fallbackSheetName}"`);
+                  }
+                }
+              }
+            } catch (fallbackErr) {
+              console.error(`[MultiPart] Fallback processing failed for part ${part.originalName}:`, fallbackErr);
+            }
+          }
+        }
+      }
+
+      if (processedBuffers.length === 1) {
+        processed = partsResults[0];
+      } else if (processedBuffers.length > 1) {
+        processed = await mergeProcessedBuffers(processedBuffers, {
+          originalColumnsCount: partsResults[0].originalColumnsCount,
+          removedColumnsCount: partsResults[0].removedColumnsCount,
+          keptColumnsCount: partsResults[0].keptColumnsCount,
+          totalOriginalRows: partsResults.reduce((sum, r) => sum + (r.originalRowsCount || 0), 0),
+          appliedEstadoFilter: estadoConservacaoFilter,
+          appliedRodoviaFilter: rodoviaFilter,
+        });
+        processed.keptRowsCount = partsResults.reduce((sum, r) => sum + (r.keptRowsCount || 0), 0);
+      } else {
+        processed = await processWorkbookWithZip(
+          fileInfo.filePath,
+          sheetName,
+          columnIndicesToRemove,
+          estadoConservacaoFilter,
+          rodoviaFilter,
+          featureType
+        );
+      }
+    } else {
+      processed = await processWorkbookWithZip(
+        fileInfo.filePath,
+        sheetName,
+        columnIndicesToRemove,
+        estadoConservacaoFilter,
+        rodoviaFilter,
+        featureType
+      );
+    }
 
     let finalFileName = customFileName ? customFileName.trim() : '';
     if (!finalFileName) {
@@ -3663,6 +4038,7 @@ function formatWorksheetLayout(ws: ExcelJS.Worksheet) {
       let hAlign: 'left' | 'center' | 'right' = 'left';
       if (isPhotoCol) {
         hAlign = 'center';
+        cell.font = { name: 'Calibri', size: 1, color: { argb: 'FFFFFFFF' } };
       } else {
         const val = cell.value;
         if (typeof val === 'number') {
