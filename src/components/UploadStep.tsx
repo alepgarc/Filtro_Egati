@@ -46,7 +46,7 @@ export const UploadStep: React.FC<UploadStepProps> = ({
   const lastSuccessDataRef = useRef<UploadResponse | null>(null);
 
   const [uploadedPartsMap, setUploadedPartsMap] = useState<Record<string, string[]>>({});
-  const currentSessionKey = `${selectedFeature}_${parcialNumber}`;
+  const currentSessionKey = selectedFeature;
   const currentParts = uploadedPartsMap[currentSessionKey] || [];
 
   // Reset state and file input on mount or feature change
@@ -271,6 +271,15 @@ export const UploadStep: React.FC<UploadStepProps> = ({
 
   const validateAndUploadFiles = async (files: File[]) => {
     if (!files || files.length === 0) return;
+
+    // Auto-detect parcial number from filename (e.g. "EntregaParcial5.xlsx" -> "5")
+    const firstFileName = files[0].name;
+    const parcialMatch = firstFileName.match(/parcial\s*(\d+)/i);
+    const effectiveParcial = (parcialMatch && parcialMatch[1]) ? parcialMatch[1] : parcialNumber;
+    if (parcialMatch && parcialMatch[1]) {
+      onParcialChange(parcialMatch[1]);
+    }
+
     setErrorMessage(null);
     setIsUploading(true);
     setUploadProgress(5);
@@ -281,7 +290,7 @@ export const UploadStep: React.FC<UploadStepProps> = ({
         await fetch('/api/reset-session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ featureType: selectedFeature, parcialNumber }),
+          body: JSON.stringify({ featureType: selectedFeature }),
         });
       } catch (err) {
         console.warn('Reset session before batch failed:', err);
@@ -579,7 +588,7 @@ export const UploadStep: React.FC<UploadStepProps> = ({
                 await fetch('/api/reset-session', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ featureType: selectedFeature, parcialNumber }),
+                  body: JSON.stringify({ featureType: selectedFeature }),
                 });
                 setUploadedPartsMap((prev) => {
                   const next = { ...prev };

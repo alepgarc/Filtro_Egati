@@ -1116,7 +1116,7 @@ export function normalizeRodoviaForFeature(rodovia: string, featureType?: string
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9]/g, '');
-    if (norm.includes('376')) {
+    if (norm.includes('br376') || norm.includes('376')) {
       return 'BR/376';
     }
   }

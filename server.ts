@@ -181,8 +181,8 @@ function fixFileNameEncoding(name: string): string {
 }
 
 // Helpers for EstadoConservacao / Situação Retrorrefletancia and Rodovia column and filter detection
-function normalizeString(str: string): string {
-  return (str || '')
+function normalizeString(str: any): string {
+  return String(str ?? '')
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -510,6 +510,12 @@ function isEstadoConservacaoCol(name: string): boolean {
   return isTargetRowStatusCol(name);
 }
 
+function matchesObservacaoFilter(cellValue: string, filter: string): boolean {
+  if (!filter) return true;
+  if (!cellValue) return false;
+  return cellValue.toLowerCase().includes(filter.toLowerCase());
+}
+
 function matchesEstadoFilter(cellValue: string, filter: string): boolean {
   if (!filter || filter.toUpperCase() === 'TODOS' || filter.toUpperCase() === 'TODAS') return true;
   if (!cellValue) return false;
@@ -684,7 +690,7 @@ function normalizeRodoviaForFeature(rodovia: string, featureType?: string): stri
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9]/g, '');
     // For EPS - Defensa, always treat any variation of BR-376 (e.g. BR-376 CN, BR-376 TU, BR-376 PR, BR-376/PR) as "BR/376"
-    if (norm.includes('376')) {
+    if (norm.includes('br376') || norm.includes('376')) {
       return 'BR/376';
     }
   }
@@ -1075,7 +1081,7 @@ const featureParcialSessions = new Map<string, FeatureSession>();
 function findFeatureSession(
   fileId?: string,
   featureType?: string,
-  parcialNumber?: string
+  _parcialNumber?: string
 ): FeatureSession | undefined {
   if (fileId) {
     for (const session of featureParcialSessions.values()) {
@@ -1084,7 +1090,7 @@ function findFeatureSession(
       }
     }
   }
-  const sessionKey = `${featureType || 'drenagem_profunda'}_parcial_${parcialNumber || '1'}`;
+  const sessionKey = featureType || 'drenagem_profunda';
   return featureParcialSessions.get(sessionKey);
 }
 
@@ -1135,10 +1141,46 @@ async function mergeProcessedBuffers(buffers: Buffer[], meta?: MergeMetadata) {
       const lastRow = masterSheet.rowCount;
       const rowOffset = lastRow > 0 ? lastRow - 1 : 0;
 
+      // Map columns by header name from sheet to masterSheet
+      const masterHeaders: string[] = [];
+      const masterHeaderRow = masterSheet.getRow(1);
+      masterHeaderRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        masterHeaders[colNumber] = normalizeString(String(cell.value || ''));
+      });
+
+      const partColToMasterCol = new Map<number, number>();
+      const partHeaderRow = sheet.getRow(1);
+      partHeaderRow.eachCell({ includeEmpty: true }, (cell, partColNumber) => {
+        const normPart = normalizeString(String(cell.value || ''));
+        if (!normPart) return;
+        for (let m = 1; m < masterHeaders.length; m++) {
+          if (masterHeaders[m] === normPart) {
+            partColToMasterCol.set(partColNumber, m);
+            break;
+          }
+        }
+      });
+
       sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
         if (rowNumber === 1 && lastRow > 0) return; // skip duplicate header row
-        const values = Array.isArray(row.values) ? row.values.slice(1) : row.values;
-        const newRow = masterSheet!.addRow(values);
+
+        let valuesToAdd: any[];
+        if (partColToMasterCol.size > 0 && masterHeaders.length > 1) {
+          const mapped: any[] = new Array(masterHeaders.length - 1).fill('');
+          row.eachCell({ includeEmpty: true }, (cell, partColNumber) => {
+            const masterCol = partColToMasterCol.get(partColNumber);
+            if (masterCol !== undefined && masterCol >= 1) {
+              mapped[masterCol - 1] = cell.value;
+            }
+          });
+          valuesToAdd = mapped;
+        } else {
+          valuesToAdd = Array.isArray(row.values)
+            ? row.values.slice(1)
+            : Object.values(row.values || {});
+        }
+
+        const newRow = masterSheet!.addRow(valuesToAdd);
         if (row.height) {
           newRow.height = row.height;
         } else {
@@ -1157,7 +1199,9 @@ async function mergeProcessedBuffers(buffers: Buffer[], meta?: MergeMetadata) {
             });
 
             const newRow0 = Math.round(img.range.tl.row) + rowOffset;
-            const targetCol = Math.floor(img.range.tl.col);
+            const origPartCol0 = Math.floor(img.range.tl.col);
+            const mappedMasterCol1 = partColToMasterCol.get(origPartCol0 + 1);
+            const targetCol = mappedMasterCol1 !== undefined ? (mappedMasterCol1 - 1) : origPartCol0;
 
             masterSheet.addImage(addedId, {
               tl: { col: targetCol, row: newRow0 },
@@ -1268,7 +1312,7 @@ async function processCompletedUpload(
     sheetNames,
   });
 
-  const sessionKey = `${featureType || 'drenagem_profunda'}_parcial_${parcialNumber || '1'}`;
+  const sessionKey = featureType || 'drenagem_profunda';
   let session = featureParcialSessions.get(sessionKey);
 
   if (!session) {
@@ -1280,7 +1324,7 @@ async function processCompletedUpload(
     featureParcialSessions.set(sessionKey, session);
   }
 
-  const existingPartIdx = session.parts.findIndex((p) => p.fileId === fileId || p.originalName === originalName);
+  const existingPartIdx = session.parts.findIndex((p) => p.fileId === fileId);
   if (existingPartIdx >= 0) {
     session.parts[existingPartIdx] = {
       fileId,
@@ -1308,7 +1352,8 @@ async function processCompletedUpload(
 
     for (const part of session.parts) {
       try {
-        const partDetails = await getSheetDetailsAsync(part.filePath, activeSheet, featureType);
+        const resolvedTab = await resolvePartSheetName(part.filePath, activeSheet, featureType);
+        const partDetails = await getSheetDetailsAsync(part.filePath, resolvedTab, featureType);
         totalRows += partDetails.totalRows;
         if (partDetails.rodoviaOptions) {
           partDetails.rodoviaOptions.forEach((r) => combinedRodovias.add(r));
@@ -1383,8 +1428,8 @@ app.get('/api/upload-status/:uploadId', (req, res) => {
 
 // Endpoint to reset session
 app.post('/api/reset-session', (req, res) => {
-  const { featureType, parcialNumber } = req.body;
-  const sessionKey = `${featureType || 'drenagem_profunda'}_parcial_${parcialNumber || '1'}`;
+  const { featureType } = req.body;
+  const sessionKey = featureType || 'drenagem_profunda';
   const session = featureParcialSessions.get(sessionKey);
   
   if (session) {
@@ -1403,7 +1448,7 @@ app.post('/api/reset-session', (req, res) => {
 
 // 1. Chunked Upload endpoint (bypasses Cloud Run / proxy 32MB payload limit for large files)
 app.post('/api/upload-chunk', (req, res) => {
-  chunkUpload.single('chunk')(req, res, async (err) => {
+  chunkUpload.single('chunk')(req as any, res as any, async (err) => {
     if (err) {
       console.error('Chunk upload error:', err);
       return res.status(400).json({
@@ -1481,9 +1526,13 @@ app.post('/api/upload-chunk', (req, res) => {
           console.warn('Could not remove chunk dir:', rmErr);
         }
 
-        const parcialNumber = (req.body.parcialNumber as string) || '1';
+        let parcialNumber = (req.body.parcialNumber as string) || '1';
+        const parcialMatch = fileName.match(/parcial\s*(\d+)/i);
+        if (parcialMatch && parcialMatch[1]) {
+          parcialNumber = parcialMatch[1];
+        }
         const stat = fs.statSync(finalFilePath);
-        console.log(`[Upload] File assembled: ${finalFilePath} (${stat.size} bytes). Processing...`);
+        console.log(`[Upload] File assembled: ${finalFilePath} (${stat.size} bytes). Processing for Parcial ${parcialNumber}...`);
         const result = await processCompletedUpload(finalFilePath, fileName, stat.size, featureType, parcialNumber);
         console.log(`[Upload] Successfully processed ${fileName} (${result.sheetNames.length} sheets)`);
 
@@ -1506,7 +1555,7 @@ app.post('/api/upload-chunk', (req, res) => {
 
 // 2. Direct Upload endpoint (for files submitted as single multipart request)
 app.post('/api/upload', (req, res) => {
-  upload.single('file')(req, res, async (err) => {
+  upload.single('file')(req as any, res as any, async (err) => {
     if (err) {
       console.error('Multer upload error:', err);
       if (err instanceof multer.MulterError) {
@@ -1596,7 +1645,8 @@ const handleSheetDetails = async (req: express.Request, res: express.Response) =
 
       for (const part of session.parts) {
         try {
-          const partDetails = await getSheetDetailsAsync(part.filePath, sheetName, featureType);
+          const resolvedTab = await resolvePartSheetName(part.filePath, sheetName, featureType);
+          const partDetails = await getSheetDetailsAsync(part.filePath, resolvedTab, featureType);
           totalRows += partDetails.totalRows;
           if (partDetails.rodoviaOptions) {
             partDetails.rodoviaOptions.forEach((r) => combinedRodovias.add(r));
@@ -1655,6 +1705,46 @@ function getRelsNodes(dom: any): any[] {
   const r2 = Array.from(dom.getElementsByTagNameNS('*', 'Relationship'));
   const relsSet = new Set([...r1, ...r2]);
   return Array.from(relsSet);
+}
+
+async function resolvePartSheetName(partFilePath: string, targetSheetName: string, featureType?: string): Promise<string> {
+  try {
+    const wb = XLSX.readFile(partFilePath, { bookSheets: true });
+    const names = wb.SheetNames || [];
+    if (names.length === 0) return targetSheetName;
+
+    const exact = names.find(n => n.toLowerCase().trim() === targetSheetName.toLowerCase().trim());
+    if (exact) return exact;
+
+    if (featureType === 'eps_defensa') {
+      const expectedTabs = [
+        'Barreira de Concreto', 'Defensa Metalica', 'Defensa Metálica', 'Defensa OAE', 'Defensa OEA',
+        'Barreiras de Concreto', 'Defensas Metalicas', 'Defensas Metálicas', 'Defensas', 'Barreiras', 'Defensa', 'Barreira'
+      ];
+      const matched = names.find((sn) => {
+        const normSn = normalizeString(sn);
+        return expectedTabs.some((exp) => {
+          const normExp = normalizeString(exp);
+          return normSn === normExp || normSn.includes(normExp) || normExp.includes(normSn) || normSn.replace(/s$/g, '') === normExp.replace(/s$/g, '');
+        });
+      });
+      if (matched) return matched;
+    }
+
+    const normTarget = normalizeString(targetSheetName);
+    const normMatch = names.find(n => normalizeString(n) === normTarget);
+    if (normMatch) return normMatch;
+
+    const subMatch = names.find(n => {
+      const normN = normalizeString(n);
+      return normN.includes(normTarget) || normTarget.includes(normN);
+    });
+    if (subMatch) return subMatch;
+
+    return names[0] || targetSheetName;
+  } catch {
+    return targetSheetName;
+  }
 }
 
 async function findSheetXmlPath(
@@ -1797,7 +1887,10 @@ async function processWorkbookWithZip(
   columnIndicesToRemove: number[],
   estadoConservacaoFilter?: string | null,
   rodoviaFilter?: string | null,
-  featureType?: string
+  observacaoFilter?: string | null,
+  observacaoColLetter?: string | null,
+  featureType?: string,
+  colNamesToKeep?: string[]
 ) {
   const data = fs.readFileSync(inputPath);
   const zip = await JSZip.loadAsync(data);
@@ -1948,14 +2041,43 @@ async function processWorkbookWithZip(
   headerLettersList.sort((a, b) => colToIdx(a) - colToIdx(b));
   const headerValuesList = headerLettersList.map((letter) => headersMap.get(letter) || '');
 
+  if (colNamesToKeep && colNamesToKeep.length > 0) {
+    keepIndices.clear();
+    const normKeepSet = new Set(colNamesToKeep.map((n) => normalizeString(n)));
+    for (let i = 0; i < headerLettersList.length; i++) {
+      const letter = headerLettersList[i];
+      const name = headerValuesList[i];
+      if (normKeepSet.has(normalizeString(name))) {
+        keepIndices.add(colToIdx(letter));
+      }
+    }
+    if (keepIndices.size === 0) {
+      for (let c = 0; c < totalCols; c++) {
+        keepIndices.add(c);
+      }
+    }
+    newColIdxMap.clear();
+    let nIdx = 0;
+    for (let c = 0; c < totalCols; c++) {
+      if (keepIndices.has(c)) {
+        newColIdxMap.set(c, nIdx);
+        nIdx++;
+      }
+    }
+  }
+
   const statusIdxInHeaders = findStatusColumnIndex(headerValuesList, featureType);
   const rodoviaIdxInHeaders = findRodoviaColumnIndex(headerValuesList);
+  const observacaoIdxInHeaders = findObservacaoColumnIndex(headerValuesList);
 
   if (statusIdxInHeaders >= 0) {
     estadoConservacaoColLetter = headerLettersList[statusIdxInHeaders];
   }
   if (rodoviaIdxInHeaders >= 0) {
     rodoviaColLetter = headerLettersList[rodoviaIdxInHeaders];
+  }
+  if (observacaoIdxInHeaders >= 0) {
+    observacaoColLetter = headerLettersList[observacaoIdxInHeaders];
   }
 
   // Check if filtering by EstadoConservacao is active
@@ -2045,7 +2167,28 @@ async function processWorkbookWithZip(
       matchesRodovia = matchesRodoviaFilter(cellVal, rodoviaFilter!, featureType);
     }
 
-    if (matchesEstado && matchesRodovia) {
+    // Check if filtering by Observacao is active
+    const isObservacaoFilterActive = Boolean(
+      observacaoFilter &&
+        observacaoFilter.trim() !== '' &&
+        observacaoColLetter !== null
+    );
+
+    let matchesObservacao = true;
+    if (isObservacaoFilterActive) {
+      let cellVal = '';
+      const targetCellRef = `${observacaoColLetter}${rNum}`.toUpperCase();
+      for (let j = 0; j < cChildren.length; j++) {
+        const c = cChildren.item(j);
+        if (c?.getAttribute('r')?.toUpperCase() === targetCellRef) {
+          cellVal = getCellTextValue(c, sharedStrings);
+          break;
+        }
+      }
+      matchesObservacao = matchesObservacaoFilter(cellVal, observacaoFilter!);
+    }
+
+    if (matchesEstado && matchesRodovia && matchesObservacao) {
       let kmStr = '';
       if (kmColLetter) {
         const kmCellRef = `${kmColLetter}${rNum}`.toUpperCase();
@@ -2857,7 +3000,7 @@ async function processWorkbookWithZip(
   }
 
   // Output new zip buffer directly (fully compliant OpenXML with all drawings, styles, images, extents, XML relationships, and views preserved 100% intact)
-  const outBuf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  const outBuf = await zip.generateAsync({ type: 'nodebuffer', compression: 'STORE' });
 
   return {
     buffer: outBuf,
@@ -3197,6 +3340,8 @@ app.post('/api/process', async (req, res) => {
     columnIndicesToRemove,
     estadoConservacaoFilter,
     rodoviaFilter,
+    observacaoFilter,
+    observacaoColLetter,
     featureType,
     customFileName,
     parcialNumber,
@@ -3206,6 +3351,8 @@ app.post('/api/process', async (req, res) => {
     columnIndicesToRemove: number[];
     estadoConservacaoFilter?: string | null;
     rodoviaFilter?: string | null;
+    observacaoFilter?: string | null;
+    observacaoColLetter?: string | null;
     featureType?: string;
     customFileName?: string;
     parcialNumber?: number | string | null;
@@ -3263,6 +3410,17 @@ app.post('/api/process', async (req, res) => {
   try {
     const session = findFeatureSession(fileInfo.fileId, featureType, parcialNumber ? String(parcialNumber) : undefined);
 
+    let masterColNamesToKeep: string[] | undefined;
+    try {
+      const masterDetails = await getSheetDetailsAsync(fileInfo.filePath, sheetName, featureType);
+      if (masterDetails && masterDetails.columns) {
+        const removedSet = new Set(columnIndicesToRemove);
+        masterColNamesToKeep = masterDetails.columns
+          .filter((c) => !removedSet.has(c.index))
+          .map((c) => normalizeString(c.name));
+      }
+    } catch {}
+
     let processed: any;
     if (session && session.parts && session.parts.length > 0) {
       const processedBuffers: Buffer[] = [];
@@ -3272,13 +3430,17 @@ app.post('/api/process', async (req, res) => {
         if (fs.existsSync(part.filePath)) {
           let successPart = false;
           try {
+            const resolvedTab = await resolvePartSheetName(part.filePath, sheetName, featureType);
             const resPart = await processWorkbookWithZip(
               part.filePath,
-              sheetName,
+              resolvedTab,
               columnIndicesToRemove,
               estadoConservacaoFilter,
               rodoviaFilter,
-              featureType
+              observacaoFilter,
+              observacaoColLetter,
+              featureType,
+              masterColNamesToKeep
             );
             if (resPart.buffer && resPart.buffer.length > 0) {
               processedBuffers.push(Buffer.from(resPart.buffer));
@@ -3306,7 +3468,10 @@ app.post('/api/process', async (req, res) => {
                     columnIndicesToRemove,
                     estadoConservacaoFilter,
                     rodoviaFilter,
-                    featureType
+                    observacaoFilter,
+                    observacaoColLetter,
+                    featureType,
+                    masterColNamesToKeep
                   );
                   if (resPartFallback.buffer && resPartFallback.buffer.length > 0) {
                     processedBuffers.push(Buffer.from(resPartFallback.buffer));
@@ -3341,7 +3506,10 @@ app.post('/api/process', async (req, res) => {
           columnIndicesToRemove,
           estadoConservacaoFilter,
           rodoviaFilter,
-          featureType
+          observacaoFilter,
+          observacaoColLetter,
+          featureType,
+          masterColNamesToKeep
         );
       }
     } else {
@@ -3351,7 +3519,10 @@ app.post('/api/process', async (req, res) => {
         columnIndicesToRemove,
         estadoConservacaoFilter,
         rodoviaFilter,
-        featureType
+        observacaoFilter,
+        observacaoColLetter,
+        featureType,
+        masterColNamesToKeep
       );
     }
 

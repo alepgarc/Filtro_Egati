@@ -299,6 +299,19 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
     });
   }, [sheetDetails.columns, featureType]);
 
+  const observacaoColInfo = useMemo(() => {
+    return sheetDetails.columns.find((col) => {
+      const norm = normalizeColKey(col.name);
+      return (
+        norm === 'observacao' ||
+        norm === 'observacoes' ||
+        norm === 'obs' ||
+        norm === 'nota' ||
+        norm === 'comentario'
+      );
+    });
+  }, [sheetDetails.columns]);
+
   const rodoviaColInfo = useMemo(() => {
     return sheetDetails.columns.find((col) => {
       const norm = normalizeColKey(col.name);
@@ -406,6 +419,8 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
           columnIndicesToRemove,
           estadoConservacaoFilter: estadoFilter.trim() !== '' ? estadoFilter : null,
           rodoviaFilter: rodoviaFilter.trim() !== '' ? rodoviaFilter : null,
+          observacaoFilter: observacaoFilter.trim() !== '' ? observacaoFilter : null,
+          observacaoColLetter: observacaoColInfo ? observacaoColInfo.letter : null,
           featureType,
           parcialNumber,
         }),

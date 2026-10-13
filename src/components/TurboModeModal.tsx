@@ -213,7 +213,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
     featureType === 'terrapleno'
       ? 'R4'
       : featureType === 'eps_defensa'
-      ? 'Ruim'
+      ? 'Todos'
       : isReprovadoFeature
       ? 'Reprovado'
       : 'PRECÁRIO';
@@ -921,7 +921,7 @@ export const TurboModeModal: React.FC<TurboModeModalProps> = ({
                       {featureType === 'terrapleno'
                         ? 'Filtrar por Nível de Risco (padrão: R4)'
                         : featureType === 'eps_defensa'
-                        ? 'Filtrar por Aparência Geral (padrão: Ruim)'
+                        ? 'Filtrar por Aparência Geral (padrão: Todos)'
                         : 'Filtrar por situação'}
                     </div>
                   </div>
