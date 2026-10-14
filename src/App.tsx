@@ -17,6 +17,7 @@ export default function App() {
   const [selectedFeature, setSelectedFeature] = useState<DrainageFeatureType>('drenagem_profunda');
   const [parcialNumber, setParcialNumber] = useState<string>('1');
   const [uploadData, setUploadData] = useState<UploadResponse | null>(null);
+  const [activeSheet, setActiveSheet] = useState<string>('');
   const [processedResult, setProcessedResult] = useState<ProcessResponse | null>(null);
 
   const handleUploadSuccess = (data: UploadResponse) => {
@@ -24,6 +25,7 @@ export default function App() {
       setSelectedFeature(data.featureType);
     }
     setUploadData(data);
+    setActiveSheet(data.activeSheet);
     setCurrentStep(2);
   };
 
@@ -117,6 +119,8 @@ export default function App() {
               >
                 <ColumnSelectionStep
                   uploadData={uploadData}
+                  activeSheet={activeSheet}
+                  onActiveSheetChange={setActiveSheet}
                   initialFeatureType={selectedFeature}
                   onFeatureChange={setSelectedFeature}
                   parcialNumber={parcialNumber}

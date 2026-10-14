@@ -51,6 +51,8 @@ export const ESTADO_CONSERVACAO_OPTIONS = [
 
 interface ColumnSelectionStepProps {
   uploadData: UploadResponse;
+  activeSheet?: string;
+  onActiveSheetChange?: (sheet: string) => void;
   initialFeatureType?: DrainageFeatureType;
   onFeatureChange?: (feature: DrainageFeatureType) => void;
   parcialNumber: string;
@@ -61,6 +63,8 @@ interface ColumnSelectionStepProps {
 
 export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
   uploadData,
+  activeSheet: propActiveSheet,
+  onActiveSheetChange,
   initialFeatureType = 'drenagem_profunda',
   onFeatureChange,
   parcialNumber,
@@ -71,7 +75,7 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
   const [featureType, setFeatureType] = useState<DrainageFeatureType>(
     uploadData.featureType || initialFeatureType
   );
-  const [activeSheet, setActiveSheet] = useState<string>(uploadData.activeSheet);
+  const [activeSheet, setActiveSheet] = useState<string>(propActiveSheet || uploadData.activeSheet);
   const [sheetDetails, setSheetDetails] = useState<SheetDetails>(uploadData.sheetDetails);
   const [isLoadingSheet, setIsLoadingSheet] = useState(false);
 
@@ -116,6 +120,13 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
 
   const featureConfig = DRAINAGE_FEATURES[featureType];
 
+  // Sync activeSheet with props
+  useEffect(() => {
+    if (propActiveSheet && propActiveSheet !== activeSheet) {
+      setActiveSheet(propActiveSheet);
+    }
+  }, [propActiveSheet]);
+
   // Switch sheet
   const handleSheetChange = async (newSheetName: string) => {
     if (newSheetName === activeSheet || isLoadingSheet) return;
@@ -131,6 +142,9 @@ export const ColumnSelectionStep: React.FC<ColumnSelectionStepProps> = ({
       }
       const newDetails: SheetDetails = await res.json();
       setActiveSheet(newSheetName);
+      if (onActiveSheetChange) {
+        onActiveSheetChange(newSheetName);
+      }
       setSheetDetails(newDetails);
       const matchingIdxs = newDetails.columns
         .filter((col) => isDefaultPresetField(col.name, featureType))

@@ -2032,7 +2032,9 @@ async function processWorkbookWithZip(
       headerLettersList.push(colLetter);
 
       const normH = String(headerVal || '').toLowerCase().trim();
-      if (normH === 'km' || normH === 'kmlegenda' || normH === 'km_legenda' || (!kmColLetter && normH.includes('km'))) {
+      if (normH === 'km') {
+        kmColLetter = colLetter;
+      } else if (!kmColLetter && (normH === 'km' || normH === 'kmlegenda' || normH === 'km_legenda' || normH.includes('km'))) {
         kmColLetter = colLetter;
       }
     }
@@ -2648,50 +2650,51 @@ async function processWorkbookWithZip(
         .replace('drawings/', 'drawings/_rels/')
         .replace('.xml', '.xml.rels');
 
-      if (zip.files[drawingRelsPath]) {
-        try {
-          const dRelsStr = await zip.files[drawingRelsPath].async('string');
-          const dRelsDom = parser.parseFromString(dRelsStr, 'text/xml');
-          const dRelsNodes = getRelsNodes(dRelsDom);
+      // if (zip.files[drawingRelsPath]) {
+      //   try {
+      //     const dRelsStr = await zip.files[drawingRelsPath].async('string');
+      //     const dRelsDom = parser.parseFromString(dRelsStr, 'text/xml');
+      //     const dRelsNodes = getRelsNodes(dRelsDom);
+      //
+      //     // Find all r:embed or embed or link attributes currently used in remaining drawing anchors
+      //     const usedEmbedIds = new Set<string>();
+      //     const allElements = dDom.getElementsByTagName('*');
+      //     for (let k = 0; k < allElements.length; k++) {
+      //       const el = allElements.item(k);
+      //       if (el && el.attributes) {
+      //         for (let a = 0; a < el.attributes.length; a++) {
+      //           const attr = el.attributes.item(a);
+      //           if (
+      //             attr &&
+      //             (attr.name === 'r:embed' ||
+      //               attr.name === 'r:link' ||
+      //               attr.name.endsWith(':embed') ||
+      //               attr.name.endsWith(':link') ||
+      //               attr.localName === 'embed')
+      //           ) {
+      //             if (attr.value) usedEmbedIds.add(attr.value);
+      //           }
+      //         }
+      //       }
+      //     }
+      //
+      //     const dRelsToRemove: any[] = [];
+      //     for (let i = 0; i < dRelsNodes.length; i++) {
+      //       const r = dRelsNodes[i];
+      //       const relId = r?.getAttribute('Id') || r?.getAttribute('id') || '';
+      //       if (relId && !usedEmbedIds.has(relId)) {
+      //         dRelsToRemove.push(r);
+      //       }
+      //     }
+      //     dRelsToRemove.forEach((r) => {
+      //       if (r && r.parentNode) r.parentNode.removeChild(r);
+      //     });
+      //     zip.file(drawingRelsPath, serializer.serializeToString(dRelsDom));
+      //   } catch (err) {
+      //     console.warn(`Could not prune drawing rels in ${drawingRelsPath}:`, err);
+      //   }
+      // }
 
-          // Find all r:embed or embed or link attributes currently used in remaining drawing anchors
-          const usedEmbedIds = new Set<string>();
-          const allElements = dDom.getElementsByTagName('*');
-          for (let k = 0; k < allElements.length; k++) {
-            const el = allElements.item(k);
-            if (el && el.attributes) {
-              for (let a = 0; a < el.attributes.length; a++) {
-                const attr = el.attributes.item(a);
-                if (
-                  attr &&
-                  (attr.name === 'r:embed' ||
-                    attr.name === 'r:link' ||
-                    attr.name.endsWith(':embed') ||
-                    attr.name.endsWith(':link') ||
-                    attr.localName === 'embed')
-                ) {
-                  if (attr.value) usedEmbedIds.add(attr.value);
-                }
-              }
-            }
-          }
-
-          const dRelsToRemove: any[] = [];
-          for (let i = 0; i < dRelsNodes.length; i++) {
-            const r = dRelsNodes[i];
-            const relId = r?.getAttribute('Id') || r?.getAttribute('id') || '';
-            if (relId && !usedEmbedIds.has(relId)) {
-              dRelsToRemove.push(r);
-            }
-          }
-          dRelsToRemove.forEach((r) => {
-            if (r && r.parentNode) r.parentNode.removeChild(r);
-          });
-          zip.file(drawingRelsPath, serializer.serializeToString(dRelsDom));
-        } catch (err) {
-          console.warn(`Could not prune drawing rels in ${drawingRelsPath}:`, err);
-        }
-      }
     }
   }
 
